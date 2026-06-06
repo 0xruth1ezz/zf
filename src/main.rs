@@ -296,7 +296,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         </div>
         <div class="meta">
           <div>{} records</div>
-          <div>Generated {}</div>
+          <div>Generated <time datetime="{}" data-local-datetime>{}</time></div>
         </div>
       </header>
       {}
@@ -320,6 +320,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
 </html>
 "#,
         records.len(),
+        escape_attr(&generated_at),
         escape_html(&generated_at),
         empty,
         table
@@ -328,9 +329,11 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
 
 fn sqlite_now(db_path: &Path) -> rusqlite::Result<String> {
     let conn = Connection::open(db_path)?;
-    conn.query_row("SELECT datetime('now', 'localtime')", params![], |row| {
-        row.get(0)
-    })
+    conn.query_row(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        params![],
+        |row| row.get(0),
+    )
 }
 
 fn write_response(
