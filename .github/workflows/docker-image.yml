@@ -11,9 +11,72 @@ env:
   IMAGE_NAME: cangzhang/zfrontier-lottery
 
 jobs:
+  build-rust-binaries:
+    name: Build Rust binary (${{ matrix.docker_arch }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - docker_arch: amd64
+            rust_target: x86_64-unknown-linux-gnu
+            rustflags: "-C link-arg=-fuse-ld=mold"
+          - docker_arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+            rustflags: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            mold \
+            pkg-config
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: zfrontier-report-server-${{ matrix.rust_target }}
+          cache-targets: true
+
+      - name: Build report server
+        shell: bash
+        env:
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          cargo build --release --locked --target "${{ matrix.rust_target }}"
+          mkdir -p "target/docker/${{ matrix.docker_arch }}"
+          cp "target/${{ matrix.rust_target }}/release/zfrontier-report-server" \
+            "target/docker/${{ matrix.docker_arch }}/zfrontier-report-server"
+
+      - name: Upload report server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: zfrontier-report-server-${{ matrix.docker_arch }}
+          path: target/docker/${{ matrix.docker_arch }}/zfrontier-report-server
+          if-no-files-found: error
+          retention-days: 1
+
   build-and-push:
     name: Build and push multi-arch Docker image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    needs: build-rust-binaries
     permissions:
       contents: read
 
@@ -29,6 +92,22 @@ jobs:
           image_tag="${IMAGE_NAME}:${short_sha}"
           echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Download amd64 report server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: zfrontier-report-server-amd64
+          path: target/docker/amd64
+
+      - name: Download arm64 report server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: zfrontier-report-server-arm64
+          path: target/docker/arm64
+
+      - name: Prepare report server binaries
+        shell: bash
+        run: chmod +x target/docker/*/zfrontier-report-server
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -47,10 +126,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.ci
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Write workflow summary
         shell: bash
@@ -64,4 +145,5 @@ jobs:
             echo "| Platforms | \`linux/amd64, linux/arm64\` |"
             echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
             echo "| Git short SHA | \`${{ steps.meta.outputs.short_sha }}\` |"
+            echo "| Rust binaries | Prebuilt with Actions cache before Docker build |"
           } >> "$GITHUB_STEP_SUMMARY"

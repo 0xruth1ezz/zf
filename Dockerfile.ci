@@ -1,24 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1.94-bookworm AS rust-builder
-
-WORKDIR /src
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends mold \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
-
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/src/target \
-    cargo build --release --locked \
-    && cp /src/target/release/zfrontier-report-server /tmp/zfrontier-report-server
-
 FROM mcr.microsoft.com/playwright:v1.60.0-noble
+
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -38,10 +22,10 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 COPY engaged-store.js view-engaged-lotteries.js zfrontier-lottery-crawler.js ./
-COPY --from=rust-builder /tmp/zfrontier-report-server /usr/local/bin/zfrontier-report-server
+COPY target/docker/${TARGETARCH}/zfrontier-report-server /usr/local/bin/zfrontier-report-server
 COPY docker/entrypoint.sh /usr/local/bin/zfrontier-entrypoint
 
-RUN chmod +x /usr/local/bin/zfrontier-entrypoint \
+RUN chmod +x /usr/local/bin/zfrontier-report-server /usr/local/bin/zfrontier-entrypoint \
     && mkdir -p /data
 
 EXPOSE 8787
