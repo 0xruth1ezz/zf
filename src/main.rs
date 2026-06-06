@@ -558,10 +558,11 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .iter()
         .map(|account| {
             let checked = if account.enabled { " checked" } else { "" };
+            let form_id = format!("account-save-{}", account.id);
             format!(
                 r#"
           <div class="account-row card u-round-sm">
-            <form class="account-form" method="post" action="/config/accounts" autocomplete="off">
+            <form id="{}" class="account-form" method="post" action="/config/accounts" autocomplete="off">
               <label>
                 <span>Account ID</span>
                 <input class="input--sm" name="id" value="{}" readonly>
@@ -578,20 +579,24 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
                 <input name="enabled" type="checkbox" value="1"{}>
                 <span>Enabled</span>
               </label>
-              <button class="btn-success btn--sm" type="submit">Save</button>
             </form>
-            <form method="post" action="/config/accounts/delete">
-              <input type="hidden" name="id" value="{}">
-              <button class="danger btn-danger outline btn--sm" type="submit">Delete</button>
-            </form>
+            <div class="account-actions">
+              <button class="btn-success btn--sm" type="submit" form="{}">Save</button>
+              <form class="delete-form" method="post" action="/config/accounts/delete">
+                <input type="hidden" name="id" value="{}">
+                <button class="danger btn-danger outline btn--sm" type="submit">Delete</button>
+              </form>
+            </div>
             <div class="row-meta">
               <span>Created <time datetime="{}" data-local-datetime>{}</time></span>
               <span>Updated <time datetime="{}" data-local-datetime>{}</time></span>
             </div>
           </div>"#,
+                escape_attr(&form_id),
                 escape_attr(&account.id),
                 escape_attr(&account.phone),
                 checked,
+                escape_attr(&form_id),
                 escape_attr(&account.id),
                 escape_attr(&account.created_at),
                 escape_html(&account.created_at),
@@ -687,14 +692,38 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       .account-row, .new-account {{
         padding: 14px;
       }}
+      .account-row {{
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px 16px;
+        align-items: start;
+      }}
       .account-row + .account-row {{
         margin-top: 10px;
       }}
-      .account-form, .new-account {{
+      .account-form {{
+        display: grid;
+        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto;
+        gap: 12px;
+        align-items: end;
+      }}
+      .new-account {{
         display: grid;
         grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto auto;
         gap: 12px;
         align-items: end;
+      }}
+      .account-actions {{
+        display: grid;
+        gap: 10px;
+        min-width: 82px;
+        padding-top: 27px;
+      }}
+      .account-actions button {{
+        width: 100%;
+      }}
+      .delete-form {{
+        margin: 0;
       }}
       label {{
         display: grid;
@@ -725,13 +754,14 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         min-height: 18px;
       }}
       .danger {{
-        margin-top: 10px;
+        margin: 0;
       }}
       .row-meta {{
+        grid-column: 1 / -1;
         display: flex;
         flex-wrap: wrap;
         gap: 12px;
-        margin-top: 10px;
+        margin-top: 2px;
         color: var(--muted);
         font-size: 12px;
       }}
@@ -741,8 +771,15 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
           margin-top: 8px;
           text-align: left;
         }}
+        .account-row {{
+          grid-template-columns: 1fr;
+        }}
         .account-form, .new-account {{
           grid-template-columns: 1fr;
+        }}
+        .account-actions {{
+          grid-template-columns: 1fr 1fr;
+          padding-top: 0;
         }}
         button {{
           width: 100%;
