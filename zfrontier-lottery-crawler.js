@@ -23,7 +23,7 @@ const ENGAGED_HTML = process.env.ZF_ENGAGED_HTML || path.join(ROOT_DIR, 'engaged
 const CONFIG = {
   phone: process.env.ZF_PHONE || '',
   password: process.env.ZF_PASSWORD || '',
-  days: numberFromEnv('ZF_DAYS', 3),
+  publishWindowDays: numberFromEnv('ZF_DAYS', 7),
   maxScrolls: numberFromEnv('MAX_SCROLLS', 80),
   maxPosts: numberFromEnv('MAX_POSTS', 0),
   scrollWaitMs: numberFromEnv('SCROLL_WAIT_MS', 1200),
@@ -39,7 +39,7 @@ const CONFIG = {
 
 const LOTTERY_TEXT = '点击抽奖';
 const RUSH_TEXT = '一键冲冲冲';
-const CUTOFF_MS = CONFIG.days * 24 * 60 * 60 * 1000;
+const PUBLISH_WINDOW_MS = CONFIG.publishWindowDays * 24 * 60 * 60 * 1000;
 
 function numberFromEnv(name, fallback) {
   const value = Number(process.env[name]);
@@ -418,11 +418,11 @@ async function extractPostMeta(page, request) {
   };
 }
 
-function isWithinRecentWindow(publishedAt) {
+function isWithinPublishWindow(publishedAt) {
   if (!publishedAt) return false;
   const now = Date.now();
   const time = publishedAt.getTime();
-  return time <= now + 5 * 60 * 1000 && now - time <= CUTOFF_MS;
+  return time <= now + 5 * 60 * 1000 && now - time <= PUBLISH_WINDOW_MS;
 }
 
 async function visibleLotteryButton(page) {
@@ -556,9 +556,9 @@ async function processPost(page, postRequest, engagedStore) {
     return;
   }
 
-  if (!isWithinRecentWindow(meta.publishedAt)) {
+  if (!isWithinPublishWindow(meta.publishedAt)) {
     const dateText = meta.publishedAt ? meta.publishedAt.toISOString() : 'unknown date';
-    log.info(`Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.days} days.`);
+    log.info(`Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.publishWindowDays} days.`);
     return;
   }
 
