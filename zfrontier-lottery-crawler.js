@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
-const { PlaywrightCrawler, RequestQueue, log, purgeDefaultStorages } = require('crawlee');
+const { PlaywrightCrawler, RequestQueue, log } = require('crawlee');
 const { chromium } = require('playwright');
 const {
   countEngagements,
@@ -21,6 +21,7 @@ const ROOT_DIR = __dirname;
 dotenv.config({ path: process.env.ENV_FILE || path.join(ROOT_DIR, '.env'), quiet: true });
 
 const START_URL = process.env.ZF_START_URL || 'https://www.zfrontier.com/app/#info';
+const LOGIN_URL = process.env.ZF_LOGIN_URL || 'https://www.zfrontier.com/app/login';
 const SIGN_IN_URL = process.env.ZF_SIGN_IN_URL || 'https://www.zfrontier.com/app/achievement#score';
 const PROFILE_DIR = process.env.ZF_PROFILE_DIR || path.join(ROOT_DIR, '.browser-profile');
 const ENGAGED_DB = process.env.ZF_ENGAGED_DB || path.join(ROOT_DIR, 'engaged-lotteries.sqlite');
@@ -260,23 +261,6 @@ async function isLoggedIn(page) {
   return !(await isVisible(loginEntry, 800));
 }
 
-async function openLoginModal(page) {
-  const clicked = await clickFirstVisible(page, [
-    page.locator('header').getByText('登录/注册', { exact: true }),
-    page.locator('.toolbar').getByText('登录/注册', { exact: true }),
-    page.locator('span.pointer').filter({ hasText: /^登录\/注册$/ }),
-    page.getByText('登录/注册', { exact: true }),
-  ], 3000);
-
-  if (!clicked) {
-    return false;
-  }
-
-  await waitForManualCheckpoint(page, 'Opening login prompt');
-  await page.waitForTimeout(1000);
-  return true;
-}
-
 async function fillLoginFormIfPossible(page, account) {
   if (!account.phone || !account.password) return false;
 
@@ -285,7 +269,7 @@ async function fillLoginFormIfPossible(page, account) {
     page.locator('a,button,div,span').filter({ hasText: /^手机号注册登录$/ }),
   ], 1500).catch(() => false);
   if (!clickedPhoneLogin) {
-    log.warning('Could not find 手机号注册登录 after opening the login modal.');
+    log.warning('Could not find 手机号注册登录 on the login page.');
     return false;
   }
 
@@ -332,28 +316,43 @@ async function fillLoginFormIfPossible(page, account) {
   return true;
 }
 
-async function ensureLoggedIn(page, account) {
+async function waitForLoginCompletion(page, account) {
+  try {
+    await page.waitForFunction(() => {
+      const text = document.body?.innerText || '';
+      const hasLoginForm = Boolean(document.querySelector('input[type="password"]'))
+        || /手机号注册登录|登录\/注册/.test(text);
+      return !window.location.pathname.includes('/app/login') && !hasLoginForm;
+    }, null, { timeout: 20000 });
+  } catch {
+    log.warning(`[${account.id}] Automatic login did not finish within 20s. Please complete any remaining login step if a browser is visible.`);
+  }
+}
+
+async function ensureLoggedIn(page, account, returnUrl = page.url()) {
   if (await isLoggedIn(page)) return;
 
-  log.info(`[${account.id}] Not logged in. Opening login prompt.`);
-  const openedLogin = await openLoginModal(page);
-  if (!openedLogin) {
-    log.warning(`[${account.id}] Could not click 登录/注册. Complete login manually in the opened browser.`);
-  }
+  log.info(`[${account.id}] Not logged in. Opening login page.`);
+  await navigateTo(page, LOGIN_URL, 'Opening login page');
+  await waitForManualCheckpoint(page, 'Opening login page');
 
   const filled = await fillLoginFormIfPossible(page, account);
   if (filled) {
-    try {
-      await page.waitForFunction(() => !(document.body?.innerText || '').includes('登录/注册'), null, { timeout: 20000 });
-    } catch {
-      log.warning(`[${account.id}] Automatic login did not finish within 20s. Please complete any remaining login step in the browser.`);
-    }
+    await waitForLoginCompletion(page, account);
   } else {
-    log.warning(`[${account.id}] Could not fill the login form automatically. Complete login manually in the opened browser.`);
+    log.warning(`[${account.id}] Could not fill the login form automatically. Complete login manually if a browser is visible.`);
   }
 
   await page.bringToFront().catch(() => {});
-  await page.waitForFunction(() => !(document.body?.innerText || '').includes('登录/注册'), null, { timeout: CONFIG.manualTimeoutMs });
+  await page.waitForFunction(() => {
+    const text = document.body?.innerText || '';
+    return !document.querySelector('input[type="password"]')
+      && !/手机号注册登录|登录\/注册/.test(text);
+  }, null, { timeout: CONFIG.manualTimeoutMs });
+
+  if (returnUrl && !returnUrl.includes('/app/login')) {
+    await navigateTo(page, returnUrl, 'Returning after login');
+  }
 }
 
 async function ensureInfoTab(page) {
@@ -582,7 +581,7 @@ async function performDailySignIn(page, store, account) {
 
   await navigateTo(page, SIGN_IN_URL, 'Opening daily sign-in page');
   await waitForManualCheckpoint(page, 'Opening daily sign-in page');
-  await ensureLoggedIn(page, account);
+  await ensureLoggedIn(page, account, SIGN_IN_URL);
   await page.waitForSelector('body', { timeout: 30000 }).catch(() => {});
 
   const bodyText = await page.locator('body').innerText({ timeout: 10000 }).catch(() => '');
@@ -743,7 +742,7 @@ async function processPost(page, postRequest, engagedStore, account) {
 
   await navigateTo(page, postUrl, `Opening post ${postId}`);
   await waitForManualCheckpoint(page, `Opening post ${postId}`);
-  await ensureLoggedIn(page, account);
+  await ensureLoggedIn(page, account, postUrl);
   const meta = await extractPostMeta(page, postRequest);
   const hasLottery = meta.bodyText.includes('抽奖');
 
@@ -824,7 +823,6 @@ async function main() {
 }
 
 async function runAccount(account, engagedStore, accountCount) {
-  await purgeDefaultStorages();
   const requestQueue = await RequestQueue.open(`zfrontier-${account.id}-${Date.now()}`);
   await requestQueue.addRequest({
     url: START_URL,
@@ -864,7 +862,7 @@ async function runAccount(account, engagedStore, accountCount) {
       if (request.userData.label === 'LIST') {
         await navigateTo(page, START_URL, 'Opening list page');
         await waitForManualCheckpoint(page, 'Opening list page');
-        await ensureLoggedIn(page, account);
+        await ensureLoggedIn(page, account, START_URL);
         await performDailySignIn(page, engagedStore, account);
         await navigateTo(page, START_URL, 'Reloading list page after login and daily sign-in');
 
