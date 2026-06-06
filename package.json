@@ -1,0 +1,22 @@
+{
+  "name": "zf",
+  "version": "1.0.0",
+  "description": "Crawlee + Playwright automation for zFrontier lottery posts.",
+  "main": "zfrontier-lottery-crawler.js",
+  "scripts": {
+    "start": "node zfrontier-lottery-crawler.js",
+    "dry-run": "node zfrontier-lottery-crawler.js --dry-run",
+    "view": "node view-engaged-lotteries.js",
+    "serve:report": "cargo run --bin zfrontier-report-server",
+    "check": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check view-engaged-lotteries.js && cargo check"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "crawlee": "^3.16.0",
+    "dotenv": "^17.4.2",
+    "playwright": "^1.60.0"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+target/
+.browser-profile/
+storage/
+engaged-lotteries.json
+engaged-lotteries.sqlite
+engaged-lotteries.html
+.env
