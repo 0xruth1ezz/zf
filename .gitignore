@@ -6,3 +6,5 @@ engaged-lotteries.json
 engaged-lotteries.sqlite
 engaged-lotteries.html
 .env
+data/*
+!data/.gitkeep

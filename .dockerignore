@@ -5,6 +5,7 @@ engaged-lotteries.html
 engaged-lotteries.sqlite
 node_modules
 storage
+data
 target/*
 !target/docker/
 !target/docker/**

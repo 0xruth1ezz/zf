@@ -21,7 +21,4 @@ services:
     ports:
       - "8787:8787"
     volumes:
-      - zfrontier-data:/data
-
-volumes:
-  zfrontier-data:
+      - ./data:/data
