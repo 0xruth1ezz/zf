@@ -206,8 +206,9 @@ function renderEngagementHtml(store) {
 function buildHtml(lotteryRows, signInRows, accountRows = []) {
   const generatedAt = new Date().toISOString();
   const accountCount = countUniqueAccounts(lotteryRows, signInRows, accountRows);
+  const accountFilterOptions = renderAccountFilterOptions(accountRows, lotteryRows, signInRows);
   const lotteryTableRows = lotteryRows.map((row, index) => `
-          <tr>
+          <tr data-account-id="${escapeAttr(row.accountId)}">
             <td>${index + 1}</td>
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><a href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.title)}</a></td>
@@ -215,7 +216,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
             <td><code>${escapeHtml(row.postId)}</code></td>
           </tr>`).join('');
   const signInTableRows = signInRows.map((row, index) => `
-          <tr>
+          <tr data-account-id="${escapeAttr(row.accountId)}">
             <td>${index + 1}</td>
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><code>${escapeHtml(row.signInDate)}</code></td>
@@ -295,6 +296,36 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
       }
       section + section {
         margin-top: 28px;
+      }
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: end;
+        gap: 12px;
+        margin: 0 0 24px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .filter-field {
+        display: grid;
+        gap: 6px;
+        min-width: 220px;
+      }
+      .filter-field span {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      select {
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 6px 34px 6px 10px;
+        background: #fff;
+        color: var(--fg);
+        font: inherit;
       }
       h2 {
         margin: 0 0 12px;
@@ -403,6 +434,15 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           <div>Generated <time datetime="${escapeAttr(generatedAt)}" data-local-datetime>${escapeHtml(formatDate(generatedAt))}</time></div>
         </div>
       </header>
+      <section class="filters" aria-label="Report filters">
+        <label class="filter-field" for="account-filter">
+          <span>Account</span>
+          <select id="account-filter" data-account-filter>
+            <option value="">All accounts</option>
+            ${accountFilterOptions}
+          </select>
+        </label>
+      </section>
       <section>
         <h2>Engaged Lotteries</h2>
         ${emptyLotteryState}
@@ -452,6 +492,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
     <script>
       (() => {
         const pad = (value) => String(value).padStart(2, '0');
+        const accountFilter = document.querySelector('[data-account-filter]');
         const formatLocalDateTime = (date) => (
           date.getFullYear() + '-' +
           pad(date.getMonth() + 1) + '-' +
@@ -478,20 +519,28 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           if (!controls || rows.length === 0 || pageSize <= 0) return;
 
           let page = 0;
-          const pageCount = Math.ceil(rows.length / pageSize);
           const previous = controls.querySelector('[data-page-prev]');
           const next = controls.querySelector('[data-page-next]');
           const status = controls.querySelector('[data-page-status]');
 
           const renderPage = () => {
+            const selectedAccount = accountFilter?.value || '';
+            const visibleRows = rows.filter((row) => !selectedAccount || row.dataset.accountId === selectedAccount);
+            const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+            if (page >= pageCount) page = pageCount - 1;
             const start = page * pageSize;
-            const end = Math.min(start + pageSize, rows.length);
-            rows.forEach((row, index) => {
-              row.hidden = index < start || index >= end;
+            const end = Math.min(start + pageSize, visibleRows.length);
+            rows.forEach((row) => {
+              row.hidden = true;
             });
-            previous.disabled = page === 0;
-            next.disabled = page >= pageCount - 1;
-            status.textContent = (start + 1) + '-' + end + ' of ' + rows.length;
+            visibleRows.slice(start, end).forEach((row) => {
+              row.hidden = false;
+            });
+            previous.disabled = page === 0 || visibleRows.length === 0;
+            next.disabled = page >= pageCount - 1 || visibleRows.length === 0;
+            status.textContent = visibleRows.length === 0
+              ? '0 of 0'
+              : (start + 1) + '-' + end + ' of ' + visibleRows.length;
           };
 
           previous.addEventListener('click', () => {
@@ -502,6 +551,10 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           next.addEventListener('click', () => {
             if (page >= pageCount - 1) return;
             page += 1;
+            renderPage();
+          });
+          accountFilter?.addEventListener('change', () => {
+            page = 0;
             renderPage();
           });
 
@@ -541,6 +594,18 @@ function countUniqueAccounts(...groups) {
     if (row.id) accounts.add(row.id);
   });
   return accounts.size;
+}
+
+function renderAccountFilterOptions(...groups) {
+  const accountIds = new Set();
+  groups.flat().forEach((row) => {
+    if (row.accountId) accountIds.add(row.accountId);
+    if (row.id) accountIds.add(row.id);
+  });
+  return Array.from(accountIds)
+    .sort()
+    .map((accountId) => `<option value="${escapeAttr(accountId)}">${escapeHtml(accountId)}</option>`)
+    .join('\n            ');
 }
 
 function escapeHtml(value) {

@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -230,10 +230,7 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
     let raw = String::from_utf8_lossy(&bytes).to_string();
     let header_end = raw.find("\r\n\r\n").unwrap_or(raw.len());
     let headers = raw[..header_end].to_string();
-    let body = raw
-        .get(header_end + 4..)
-        .unwrap_or("")
-        .to_string();
+    let body = raw.get(header_end + 4..).unwrap_or("").to_string();
     let request_line = headers.lines().next().unwrap_or("");
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
@@ -485,7 +482,11 @@ fn save_account_from_form(db_path: &Path, body: &str) -> Result<(), String> {
     let id = normalize_account_id(form.get("id").map(String::as_str).unwrap_or(""));
     let phone = form.get("phone").map(|value| value.trim()).unwrap_or("");
     let password = form.get("password").map(|value| value.trim()).unwrap_or("");
-    let enabled = if form.contains_key("enabled") { 1_i64 } else { 0_i64 };
+    let enabled = if form.contains_key("enabled") {
+        1_i64
+    } else {
+        0_i64
+    };
 
     if id.is_empty() {
         return Err("account id is required".to_string());
@@ -503,8 +504,7 @@ fn save_account_from_form(db_path: &Path, body: &str) -> Result<(), String> {
         )
         .ok();
     let password_to_save = if password.is_empty() {
-        existing_password
-            .ok_or_else(|| "password is required for new accounts".to_string())?
+        existing_password.ok_or_else(|| "password is required for new accounts".to_string())?
     } else {
         password.to_string()
     };
@@ -838,6 +838,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
     let sign_ins = load_sign_ins(db_path)?;
     let accounts = load_accounts(db_path)?;
     let account_count = unique_account_count(&records, &sign_ins, &accounts);
+    let account_filter_options =
+        render_account_filter_options(&report_account_ids(&records, &sign_ins, &accounts));
     let generated_at = sqlite_now(db_path).unwrap_or_else(|_| "now".to_string());
     let rows = records
         .iter()
@@ -845,13 +847,14 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         .map(|(index, record)| {
             format!(
                 r#"
-          <tr>
+          <tr data-account-id="{}">
             <td>{}</td>
             <td><code>{}</code></td>
             <td><a href="{}" target="_blank" rel="noreferrer">{}</a></td>
             <td><time datetime="{}" data-local-datetime>{}</time></td>
             <td><code>{}</code></td>
           </tr>"#,
+                escape_attr(&record.account_id),
                 index + 1,
                 escape_html(&record.account_id),
                 escape_attr(&record.url),
@@ -869,7 +872,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         .map(|(index, record)| {
             format!(
                 r#"
-          <tr>
+          <tr data-account-id="{}">
             <td>{}</td>
             <td><code>{}</code></td>
             <td><code>{}</code></td>
@@ -877,6 +880,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
             <td>{}</td>
             <td>{}</td>
           </tr>"#,
+                escape_attr(&record.account_id),
                 index + 1,
                 escape_html(&record.account_id),
                 escape_html(&record.sign_in_date),
@@ -1017,6 +1021,36 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       section + section {{
         margin-top: 28px;
       }}
+      .filters {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: end;
+        gap: 12px;
+        margin: 0 0 24px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }}
+      .filter-field {{
+        display: grid;
+        gap: 6px;
+        min-width: 220px;
+      }}
+      .filter-field span {{
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }}
+      select {{
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 6px 34px 6px 10px;
+        background: #fff;
+        color: var(--fg);
+        font: inherit;
+      }}
       h2 {{
         margin: 0 0 12px;
         font-size: 18px;
@@ -1120,6 +1154,15 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           <div>Generated <time datetime="{}" data-local-datetime>{}</time></div>
         </div>
       </header>
+      <section class="filters" aria-label="Report filters">
+        <label class="filter-field" for="account-filter">
+          <span>Account</span>
+          <select id="account-filter" data-account-filter>
+            <option value="">All accounts</option>
+            {}
+          </select>
+        </label>
+      </section>
       <section>
         <h2>Engaged Lotteries</h2>
         {}
@@ -1135,6 +1178,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       (() => {{
         const pad = (value) => String(value).padStart(2, '0');
         const formatLocalDateTime = (date) => `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}} ${{pad(date.getHours())}}:${{pad(date.getMinutes())}}:${{pad(date.getSeconds())}}`;
+        const accountFilter = document.querySelector('[data-account-filter]');
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {{
           const value = node.getAttribute('datetime');
@@ -1153,20 +1197,28 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           if (!controls || rows.length === 0 || pageSize <= 0) return;
 
           let page = 0;
-          const pageCount = Math.ceil(rows.length / pageSize);
           const previous = controls.querySelector('[data-page-prev]');
           const next = controls.querySelector('[data-page-next]');
           const status = controls.querySelector('[data-page-status]');
 
           const renderPage = () => {{
+            const selectedAccount = accountFilter?.value || '';
+            const visibleRows = rows.filter((row) => !selectedAccount || row.dataset.accountId === selectedAccount);
+            const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+            if (page >= pageCount) page = pageCount - 1;
             const start = page * pageSize;
-            const end = Math.min(start + pageSize, rows.length);
-            rows.forEach((row, index) => {{
-              row.hidden = index < start || index >= end;
+            const end = Math.min(start + pageSize, visibleRows.length);
+            rows.forEach((row) => {{
+              row.hidden = true;
             }});
-            previous.disabled = page === 0;
-            next.disabled = page >= pageCount - 1;
-            status.textContent = `${{start + 1}}-${{end}} of ${{rows.length}}`;
+            visibleRows.slice(start, end).forEach((row) => {{
+              row.hidden = false;
+            }});
+            previous.disabled = page === 0 || visibleRows.length === 0;
+            next.disabled = page >= pageCount - 1 || visibleRows.length === 0;
+            status.textContent = visibleRows.length === 0
+              ? '0 of 0'
+              : `${{start + 1}}-${{end}} of ${{visibleRows.length}}`;
           }};
 
           previous.addEventListener('click', () => {{
@@ -1177,6 +1229,10 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           next.addEventListener('click', () => {{
             if (page >= pageCount - 1) return;
             page += 1;
+            renderPage();
+          }});
+          accountFilter?.addEventListener('change', () => {{
+            page = 0;
             renderPage();
           }});
 
@@ -1193,11 +1249,44 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         sign_ins.len(),
         escape_attr(&generated_at),
         escape_html(&generated_at),
+        account_filter_options,
         empty,
         table,
         sign_in_empty,
         sign_in_table
     ))
+}
+
+fn report_account_ids(
+    records: &[Record],
+    sign_ins: &[SignInRecord],
+    accounts: &[AccountConfig],
+) -> Vec<String> {
+    let mut account_ids = BTreeSet::new();
+    for account in accounts {
+        account_ids.insert(account.id.clone());
+    }
+    for record in records {
+        account_ids.insert(record.account_id.clone());
+    }
+    for record in sign_ins {
+        account_ids.insert(record.account_id.clone());
+    }
+    account_ids.into_iter().collect()
+}
+
+fn render_account_filter_options(account_ids: &[String]) -> String {
+    account_ids
+        .iter()
+        .map(|account_id| {
+            format!(
+                r#"<option value="{}">{}</option>"#,
+                escape_attr(account_id),
+                escape_html(account_id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n            ")
 }
 
 fn sqlite_now(db_path: &Path) -> rusqlite::Result<String> {
