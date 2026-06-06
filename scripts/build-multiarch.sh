@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image="${IMAGE:-zfrontier-lottery:latest}"
+image="${IMAGE:-zf:latest}"
 platforms="${PLATFORMS:-linux/amd64,linux/arm64}"
 
 if [ "${PUSH:-0}" = "1" ]; then
@@ -16,4 +16,3 @@ else
   docker buildx build --platform linux/amd64 --tag "${image}-amd64" --load .
   docker buildx build --platform linux/arm64 --tag "${image}-arm64" --load .
 fi
-

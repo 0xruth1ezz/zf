@@ -8,7 +8,7 @@ on:
       - master
 
 env:
-  IMAGE_NAME: cangzhang/zfrontier-lottery
+  IMAGE_NAME: cangzhang/zf
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
