@@ -57,7 +57,7 @@ function buildHtml(rows) {
           <tr>
             <td>${index + 1}</td>
             <td><a href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.title)}</a></td>
-            <td><time datetime="${escapeAttr(row.engagedAt)}">${escapeHtml(formatDate(row.engagedAt))}</time></td>
+            <td><time datetime="${escapeAttr(row.engagedAt)}" data-local-datetime>${escapeHtml(formatDate(row.engagedAt))}</time></td>
             <td><code>${escapeHtml(row.postId)}</code></td>
           </tr>`).join('');
 
@@ -167,7 +167,7 @@ function buildHtml(rows) {
         </div>
         <div class="meta">
           <div>${rows.length} records</div>
-          <div>Generated ${escapeHtml(formatDate(generatedAt))}</div>
+          <div>Generated <time datetime="${escapeAttr(generatedAt)}" data-local-datetime>${escapeHtml(formatDate(generatedAt))}</time></div>
         </div>
       </header>
       ${emptyState}
@@ -184,6 +184,27 @@ function buildHtml(rows) {
         </tbody>
       </table>` : ''}
     </main>
+    <script>
+      (() => {
+        const pad = (value) => String(value).padStart(2, '0');
+        const formatLocalDateTime = (date) => (
+          date.getFullYear() + '-' +
+          pad(date.getMonth() + 1) + '-' +
+          pad(date.getDate()) + ' ' +
+          pad(date.getHours()) + ':' +
+          pad(date.getMinutes()) + ':' +
+          pad(date.getSeconds())
+        );
+
+        document.querySelectorAll('time[data-local-datetime]').forEach((node) => {
+          const value = node.getAttribute('datetime');
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return;
+          node.textContent = formatLocalDateTime(date);
+          node.title = value;
+        });
+      })();
+    </script>
   </body>
 </html>
 `;
@@ -192,7 +213,20 @@ function buildHtml(rows) {
 function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return formatLocalDateTime(date);
+}
+
+function formatLocalDateTime(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + ' ' + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(':');
 }
 
 function escapeHtml(value) {
@@ -216,4 +250,3 @@ module.exports = {
   renderEngagementHtml,
   saveEngagement,
 };
-

@@ -159,7 +159,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           <tr>
             <td>{}</td>
             <td><a href="{}" target="_blank" rel="noreferrer">{}</a></td>
-            <td><time datetime="{}">{}</time></td>
+            <td><time datetime="{}" data-local-datetime>{}</time></td>
             <td><code>{}</code></td>
           </tr>"#,
                 index + 1,
@@ -302,6 +302,20 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       {}
       {}
     </main>
+    <script>
+      (() => {{
+        const pad = (value) => String(value).padStart(2, '0');
+        const formatLocalDateTime = (date) => `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}} ${{pad(date.getHours())}}:${{pad(date.getMinutes())}}:${{pad(date.getSeconds())}}`;
+
+        document.querySelectorAll('time[data-local-datetime]').forEach((node) => {{
+          const value = node.getAttribute('datetime');
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return;
+          node.textContent = formatLocalDateTime(date);
+          node.title = value;
+        }});
+      }})();
+    </script>
   </body>
 </html>
 "#,
