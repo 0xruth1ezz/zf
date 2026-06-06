@@ -1,29 +1,34 @@
 #!/usr/bin/env node
 
+const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
 const { PlaywrightCrawler, RequestQueue, log, purgeDefaultStorages } = require('crawlee');
 const { chromium } = require('playwright');
 const {
   countEngagements,
+  countSignIns,
   hasEngagement,
+  hasSignIn,
+  listAccounts,
   openEngagedStore,
   renderEngagementHtml,
   saveEngagement,
+  saveSignIn,
 } = require('./engaged-store');
 
 const ROOT_DIR = __dirname;
 dotenv.config({ path: process.env.ENV_FILE || path.join(ROOT_DIR, '.env'), quiet: true });
 
 const START_URL = process.env.ZF_START_URL || 'https://www.zfrontier.com/app/#info';
+const SIGN_IN_URL = process.env.ZF_SIGN_IN_URL || 'https://www.zfrontier.com/app/achievement#score';
 const PROFILE_DIR = process.env.ZF_PROFILE_DIR || path.join(ROOT_DIR, '.browser-profile');
 const ENGAGED_DB = process.env.ZF_ENGAGED_DB || path.join(ROOT_DIR, 'engaged-lotteries.sqlite');
 const ENGAGED_HTML = process.env.ZF_ENGAGED_HTML || path.join(ROOT_DIR, 'engaged-lotteries.html');
 
 const CONFIG = {
-  phone: process.env.ZF_PHONE || '',
-  password: process.env.ZF_PASSWORD || '',
   publishWindowDays: numberFromEnv('ZF_DAYS', 7),
+  signInTimeZone: process.env.ZF_SIGN_IN_TZ || 'Asia/Shanghai',
   maxScrolls: numberFromEnv('MAX_SCROLLS', 80),
   maxPosts: numberFromEnv('MAX_POSTS', 0),
   scrollWaitMs: numberFromEnv('SCROLL_WAIT_MS', 1200),
@@ -65,6 +70,98 @@ function postIdFromUrl(rawUrl) {
 
 function compactText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function loadAccounts(store) {
+  const storedAccounts = loadStoredAccounts(store);
+  const configuredAccounts = storedAccounts.length > 0
+    ? storedAccounts
+    : loadNumberedAccounts();
+  const rawAccounts = configuredAccounts.length > 0
+    ? configuredAccounts
+    : loadJsonAccounts();
+  const accounts = rawAccounts.length > 0
+    ? rawAccounts
+    : [{
+      id: process.env.ZF_ACCOUNT_ID || 'default',
+      phone: process.env.ZF_PHONE || '',
+      password: process.env.ZF_PASSWORD || '',
+    }];
+
+  const ids = new Set();
+  return accounts.map((rawAccount, index) => {
+    const account = normalizeAccount(rawAccount, index);
+    if (ids.has(account.id)) {
+      throw new Error(`Duplicate account id "${account.id}" in zFrontier account configuration.`);
+    }
+    ids.add(account.id);
+    return account;
+  });
+}
+
+function loadStoredAccounts(store) {
+  return listAccounts(store, { enabledOnly: true }).map((account) => ({
+    id: account.id,
+    phone: account.phone,
+    password: account.password,
+  }));
+}
+
+function loadNumberedAccounts() {
+  return Object.keys(process.env)
+    .map((key) => key.match(/^ZF_ACCOUNT(\d+)$/)?.[1])
+    .filter(Boolean)
+    .sort((left, right) => Number(left) - Number(right))
+    .map((number) => ({
+      id: process.env[`ZF_ACCOUNT_ID${number}`] || `account-${number}`,
+      phone: process.env[`ZF_ACCOUNT${number}`] || '',
+      password: process.env[`ZF_PASSWORD${number}`] || '',
+    }));
+}
+
+function loadJsonAccounts() {
+  const raw = process.env.ZF_ACCOUNTS_FILE
+    ? fs.readFileSync(process.env.ZF_ACCOUNTS_FILE, 'utf8')
+    : process.env.ZF_ACCOUNTS;
+  if (!raw) return [];
+
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed.accounts)) return parsed.accounts;
+  throw new Error('ZF_ACCOUNTS must be a JSON array, or an object with an accounts array.');
+}
+
+function normalizeAccount(rawAccount, index) {
+  const requestedId = rawAccount.id || rawAccount.accountId || rawAccount.name || (index === 0 ? 'default' : `account-${index + 1}`);
+  const id = normalizeAccountId(requestedId);
+  const phone = String(rawAccount.phone || rawAccount.mobile || rawAccount.username || rawAccount.ZF_PHONE || '').trim();
+  const password = String(rawAccount.password || rawAccount.pass || rawAccount.ZF_PASSWORD || '').trim();
+  return { id, phone, password };
+}
+
+function normalizeAccountId(value) {
+  return compactText(value)
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'default';
+}
+
+function profileDirForAccount(account, accountCount) {
+  if (accountCount === 1 && account.id === 'default') {
+    return PROFILE_DIR;
+  }
+  return path.join(PROFILE_DIR, account.id);
+}
+
+function dateKeyForTimeZone(date = new Date(), timeZone = CONFIG.signInTimeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
 }
 
 async function isVisible(locator, timeout = 500) {
@@ -156,8 +253,8 @@ async function openLoginModal(page) {
   return true;
 }
 
-async function fillLoginFormIfPossible(page) {
-  if (!CONFIG.phone || !CONFIG.password) return false;
+async function fillLoginFormIfPossible(page, account) {
+  if (!account.phone || !account.password) return false;
 
   const clickedPhoneLogin = await clickFirstVisible(page, [
     page.getByText('手机号注册登录', { exact: true }),
@@ -193,8 +290,8 @@ async function fillLoginFormIfPossible(page) {
     return false;
   }
 
-  await phoneInput.fill(CONFIG.phone);
-  await passwordInput.fill(CONFIG.password);
+  await phoneInput.fill(account.phone);
+  await passwordInput.fill(account.password);
 
   const clickedSubmit = await clickFirstVisible(page, [
     page.locator('button').filter({ hasText: /^登录$/ }),
@@ -211,24 +308,24 @@ async function fillLoginFormIfPossible(page) {
   return true;
 }
 
-async function ensureLoggedIn(page) {
+async function ensureLoggedIn(page, account) {
   if (await isLoggedIn(page)) return;
 
-  log.info('Not logged in. Opening login prompt.');
+  log.info(`[${account.id}] Not logged in. Opening login prompt.`);
   const openedLogin = await openLoginModal(page);
   if (!openedLogin) {
-    log.warning('Could not click 登录/注册. Complete login manually in the opened browser.');
+    log.warning(`[${account.id}] Could not click 登录/注册. Complete login manually in the opened browser.`);
   }
 
-  const filled = await fillLoginFormIfPossible(page);
+  const filled = await fillLoginFormIfPossible(page, account);
   if (filled) {
     try {
       await page.waitForFunction(() => !(document.body?.innerText || '').includes('登录/注册'), null, { timeout: 20000 });
     } catch {
-      log.warning('Automatic login did not finish within 20s. Please complete any remaining login step in the browser.');
+      log.warning(`[${account.id}] Automatic login did not finish within 20s. Please complete any remaining login step in the browser.`);
     }
   } else {
-    log.warning('Could not fill the login form automatically. Complete login manually in the opened browser.');
+    log.warning(`[${account.id}] Could not fill the login form automatically. Complete login manually in the opened browser.`);
   }
 
   await page.bringToFront().catch(() => {});
@@ -439,6 +536,81 @@ async function clickConfirmIfVisible(page) {
   ], 1500).catch(() => false);
 }
 
+async function clickSignInConfirmIfVisible(page) {
+  await clickFirstVisible(page, [
+    page.getByText('确定', { exact: true }),
+    page.getByText('确认', { exact: true }),
+  ], 1200).catch(() => false);
+}
+
+async function visibleSignInButton(page) {
+  const locator = page.locator('a,button,[role="button"],.btn,.button,.submit,.plugin-btn,div,span')
+    .filter({ hasText: /^签到$/ });
+  return (await isVisible(locator, 1500)) ? locator.first() : null;
+}
+
+async function performDailySignIn(page, store, account) {
+  const signInDate = dateKeyForTimeZone();
+  if (hasSignIn(store, account.id, signInDate)) {
+    log.info(`[${account.id}] Skipping daily sign-in: ${signInDate} is already recorded.`);
+    return;
+  }
+
+  await navigateTo(page, SIGN_IN_URL, 'Opening daily sign-in page');
+  await waitForManualCheckpoint(page, 'Opening daily sign-in page');
+  await ensureLoggedIn(page, account);
+  await page.waitForSelector('body', { timeout: 30000 }).catch(() => {});
+
+  const bodyText = await page.locator('body').innerText({ timeout: 10000 }).catch(() => '');
+  let button = await visibleSignInButton(page);
+  if (!button && /已签到|今日已签到|明日再来/.test(bodyText)) {
+    const signedAt = new Date().toISOString();
+    saveSignIn(store, {
+      accountId: account.id,
+      signInDate,
+      signedAt,
+      url: SIGN_IN_URL,
+      status: 'already_signed',
+      message: 'Page already showed today as signed in.',
+    });
+    renderEngagementHtml(store);
+    log.info(`[${account.id}] Recorded daily sign-in ${signInDate}: page already showed signed in.`);
+    return;
+  }
+
+  if (!button) {
+    log.warning(`[${account.id}] Daily sign-in skipped for ${signInDate}: no visible 签到 button found.`);
+    return;
+  }
+
+  if (CONFIG.dryRun) {
+    log.warning(`[${account.id}] Dry run: would click daily 签到 for ${signInDate}.`);
+    return;
+  }
+
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click();
+  await waitForManualCheckpoint(page, 'After clicking daily sign-in');
+  await page.waitForTimeout(1500);
+  await clickSignInConfirmIfVisible(page);
+  await waitForManualCheckpoint(page, 'After confirming daily sign-in');
+  await page.waitForTimeout(1200);
+
+  button = await visibleSignInButton(page);
+  const afterText = await page.locator('body').innerText({ timeout: 10000 }).catch(() => '');
+  const signedAt = new Date().toISOString();
+  saveSignIn(store, {
+    accountId: account.id,
+    signInDate,
+    signedAt,
+    url: SIGN_IN_URL,
+    status: /已签到|今日已签到|签到成功/.test(afterText) || !button ? 'signed' : 'clicked',
+    message: 'Clicked daily 签到.',
+  });
+  renderEngagementHtml(store);
+  log.info(`[${account.id}] Recorded daily sign-in ${signInDate}.`);
+}
+
 async function clickThumbUpIfPossible(page) {
   if (CONFIG.dryRun) {
     return { clicked: false, reason: 'Dry run: would click thumb-up button' };
@@ -537,54 +709,55 @@ async function engageLottery(page) {
   return { engaged: true, reason: 'Clicked lottery action; no explicit failure was detected' };
 }
 
-async function processPost(page, postRequest, engagedStore) {
+async function processPost(page, postRequest, engagedStore, account) {
   const postUrl = normalizePostUrl(postRequest.url);
   const postId = postIdFromUrl(postUrl);
-  if (hasEngagement(engagedStore, postId)) {
-    log.info(`Skipping ${postId}: already recorded in ${path.basename(ENGAGED_DB)}.`);
+  if (hasEngagement(engagedStore, account.id, postId)) {
+    log.info(`[${account.id}] Skipping ${postId}: already recorded in ${path.basename(ENGAGED_DB)}.`);
     return;
   }
 
   await navigateTo(page, postUrl, `Opening post ${postId}`);
   await waitForManualCheckpoint(page, `Opening post ${postId}`);
-  await ensureLoggedIn(page);
+  await ensureLoggedIn(page, account);
   const meta = await extractPostMeta(page, postRequest);
   const hasLottery = meta.bodyText.includes('抽奖');
 
   if (!hasLottery) {
-    log.info(`Skipping ${postId}: no lottery text found.`);
+    log.info(`[${account.id}] Skipping ${postId}: no lottery text found.`);
     return;
   }
 
   if (!isWithinPublishWindow(meta.publishedAt)) {
     const dateText = meta.publishedAt ? meta.publishedAt.toISOString() : 'unknown date';
-    log.info(`Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.publishWindowDays} days.`);
+    log.info(`[${account.id}] Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.publishWindowDays} days.`);
     return;
   }
 
   if (/已(参与|参加|抽奖|报名)/.test(meta.bodyText) && !(await visibleLotteryButton(page))) {
-    log.info(`Skipping ${postId}: page appears to already be participated.`);
+    log.info(`[${account.id}] Skipping ${postId}: page appears to already be participated.`);
     return;
   }
 
   const thumbResult = await clickThumbUpIfPossible(page);
-  log.info(`${postId}: ${thumbResult.reason}.`);
+  log.info(`[${account.id}] ${postId}: ${thumbResult.reason}.`);
 
   const result = await engageLottery(page);
   if (!result.engaged) {
-    log.info(`Skipping ${postId}: ${result.reason}.`);
+    log.info(`[${account.id}] Skipping ${postId}: ${result.reason}.`);
     return;
   }
 
   const engagedAt = new Date().toISOString();
   saveEngagement(engagedStore, {
+    accountId: account.id,
     postId,
     url: postUrl,
     title: meta.title,
     engagedAt,
   });
   renderEngagementHtml(engagedStore);
-  log.info(`Recorded engaged lottery post ${postId}: ${meta.title || postUrl}`);
+  log.info(`[${account.id}] Recorded engaged lottery post ${postId}: ${meta.title || postUrl}`);
 }
 
 async function main() {
@@ -592,24 +765,41 @@ async function main() {
 
   const engagedStore = openEngagedStore(ENGAGED_DB, ENGAGED_HTML);
   renderEngagementHtml(engagedStore);
+  const accounts = loadAccounts(engagedStore);
 
-  if (!CONFIG.phone || !CONFIG.password) {
-    log.warning('ZF_PHONE and ZF_PASSWORD must be set for automatic login. Otherwise complete login manually in the browser.');
-  }
+  accounts
+    .filter((account) => !account.phone || !account.password)
+    .forEach((account) => {
+      log.warning(`[${account.id}] Phone/password are not fully configured. Complete login manually in the browser if needed.`);
+    });
   if (CONFIG.dryRun) {
     log.warning('Dry run is enabled. The crawler will not click lottery buttons.');
   }
 
+  for (const account of accounts) {
+    await runAccount(account, engagedStore, accounts.length);
+  }
+
+  renderEngagementHtml(engagedStore);
+  log.info(`Done. Recorded ${countEngagements(engagedStore)} engaged lottery posts and ${countSignIns(engagedStore)} daily sign-ins in ${ENGAGED_DB}.`);
+  log.info(`View records at ${ENGAGED_HTML}.`);
+  engagedStore.db.close();
+}
+
+async function runAccount(account, engagedStore, accountCount) {
   await purgeDefaultStorages();
-  const requestQueue = await RequestQueue.open(`zfrontier-${Date.now()}`);
+  const requestQueue = await RequestQueue.open(`zfrontier-${account.id}-${Date.now()}`);
   await requestQueue.addRequest({
     url: START_URL,
-    uniqueKey: 'zfrontier-info-list',
+    uniqueKey: `zfrontier-info-list-${account.id}`,
     skipNavigation: true,
     userData: { label: 'LIST' },
   });
 
   let listPageFailed = false;
+  const userDataDir = profileDirForAccount(account, accountCount);
+  log.info(`[${account.id}] Starting crawler with profile ${userDataDir}.`);
+
   const crawler = new PlaywrightCrawler({
     requestQueue,
     maxConcurrency: 1,
@@ -620,7 +810,7 @@ async function main() {
       launcher: chromium,
       useChrome: CONFIG.useChrome,
       proxyUrl: CONFIG.proxyUrl || undefined,
-      userDataDir: PROFILE_DIR,
+      userDataDir,
       useIncognitoPages: false,
       launchOptions: {
         headless: CONFIG.headless,
@@ -637,17 +827,18 @@ async function main() {
       if (request.userData.label === 'LIST') {
         await navigateTo(page, START_URL, 'Opening list page');
         await waitForManualCheckpoint(page, 'Opening list page');
-        await ensureLoggedIn(page);
-        await navigateTo(page, START_URL, 'Reloading list page after login');
+        await ensureLoggedIn(page, account);
+        await performDailySignIn(page, engagedStore, account);
+        await navigateTo(page, START_URL, 'Reloading list page after login and daily sign-in');
 
         const postRequests = await collectPostRequests(page);
-        log.info(`Processing ${postRequests.length} post pages from the 情报 tab in one browser page.`);
+        log.info(`[${account.id}] Processing ${postRequests.length} post pages from the 情报 tab in one browser page.`);
 
         for (const postRequest of postRequests) {
           try {
-            await processPost(page, postRequest, engagedStore);
+            await processPost(page, postRequest, engagedStore, account);
           } catch (error) {
-            log.error(`Failed while processing ${postRequest.url}: ${error.message}`);
+            log.error(`[${account.id}] Failed while processing ${postRequest.url}: ${error.message}`);
           }
         }
       }
@@ -662,12 +853,8 @@ async function main() {
 
   await crawler.run();
   if (listPageFailed) {
-    throw new Error(`Failed to crawl the start page: ${START_URL}`);
+    throw new Error(`[${account.id}] Failed to crawl the start page: ${START_URL}`);
   }
-  renderEngagementHtml(engagedStore);
-  log.info(`Done. Recorded ${countEngagements(engagedStore)} engaged lottery posts in ${ENGAGED_DB}.`);
-  log.info(`View records at ${ENGAGED_HTML}.`);
-  engagedStore.db.close();
 }
 
 main().catch((error) => {

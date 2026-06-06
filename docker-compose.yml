@@ -15,6 +15,8 @@ services:
       CRAWL_INTERVAL_SECONDS: "3600"
       RUN_ON_START: "1"
       ZF_DAYS: "7"
+      ZF_SIGN_IN_TZ: Asia/Shanghai
+      TZ: Asia/Shanghai
       ZF_PROFILE_DIR: /data/browser-profile
       ZF_ENGAGED_DB: /data/engaged-lotteries.sqlite
       ZF_ENGAGED_HTML: /data/engaged-lotteries.html
