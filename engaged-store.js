@@ -199,12 +199,13 @@ function listAccounts(store, options = {}) {
 function renderEngagementHtml(store) {
   const lotteryRows = listEngagements(store);
   const signInRows = listSignIns(store);
-  fs.writeFileSync(store.htmlPath, buildHtml(lotteryRows, signInRows), 'utf8');
+  const accountRows = listAccounts(store);
+  fs.writeFileSync(store.htmlPath, buildHtml(lotteryRows, signInRows, accountRows), 'utf8');
 }
 
-function buildHtml(lotteryRows, signInRows) {
+function buildHtml(lotteryRows, signInRows, accountRows = []) {
   const generatedAt = new Date().toISOString();
-  const accountCount = countUniqueAccounts(lotteryRows, signInRows);
+  const accountCount = countUniqueAccounts(lotteryRows, signInRows, accountRows);
   const lotteryTableRows = lotteryRows.map((row, index) => `
           <tr>
             <td>${index + 1}</td>
@@ -537,6 +538,7 @@ function countUniqueAccounts(...groups) {
   const accounts = new Set();
   groups.flat().forEach((row) => {
     if (row.accountId) accounts.add(row.accountId);
+    if (row.id) accounts.add(row.id);
   });
   return accounts.size;
 }

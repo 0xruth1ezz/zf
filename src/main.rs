@@ -836,7 +836,8 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
 fn render_report(db_path: &Path) -> rusqlite::Result<String> {
     let records = load_records(db_path)?;
     let sign_ins = load_sign_ins(db_path)?;
-    let account_count = unique_account_count(&records, &sign_ins);
+    let accounts = load_accounts(db_path)?;
+    let account_count = unique_account_count(&records, &sign_ins, &accounts);
     let generated_at = sqlite_now(db_path).unwrap_or_else(|_| "now".to_string());
     let rows = records
         .iter()
@@ -1208,8 +1209,15 @@ fn sqlite_now(db_path: &Path) -> rusqlite::Result<String> {
     )
 }
 
-fn unique_account_count(records: &[Record], sign_ins: &[SignInRecord]) -> usize {
+fn unique_account_count(
+    records: &[Record],
+    sign_ins: &[SignInRecord],
+    accounts: &[AccountConfig],
+) -> usize {
     let mut account_ids = HashSet::new();
+    for account in accounts {
+        account_ids.insert(account.id.as_str());
+    }
     for record in records {
         account_ids.insert(record.account_id.as_str());
     }
