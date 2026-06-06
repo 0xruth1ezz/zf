@@ -114,6 +114,67 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Ensure Docker Hub repository exists
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          namespace="${IMAGE_NAME%%/*}"
+          repository="${IMAGE_NAME#*/}"
+
+          login_payload="$(
+            python3 -c 'import json, os; print(json.dumps({"username": os.environ["DOCKERHUB_USERNAME"], "password": os.environ["DOCKERHUB_TOKEN"]}))'
+          )"
+          hub_token="$(
+            curl -fsS \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "${login_payload}" \
+              https://hub.docker.com/v2/users/login/ \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'
+          )"
+
+          status="$(
+            curl -sS \
+              -o /tmp/dockerhub-repository.json \
+              -w "%{http_code}" \
+              -H "Authorization: Bearer ${hub_token}" \
+              "https://hub.docker.com/v2/namespaces/${namespace}/repositories/${repository}"
+          )"
+
+          if [ "${status}" = "200" ]; then
+            echo "Docker Hub repository ${namespace}/${repository} already exists."
+            exit 0
+          fi
+
+          if [ "${status}" != "404" ]; then
+            cat /tmp/dockerhub-repository.json
+            exit 1
+          fi
+
+          export namespace repository
+          create_payload="$(
+            python3 -c 'import json, os; print(json.dumps({"namespace": os.environ["namespace"], "name": os.environ["repository"], "description": "zFrontier lottery crawler", "full_description": "zFrontier lottery crawler and report server.", "registry": "docker.io", "is_private": False}))'
+          )"
+          create_status="$(
+            curl -sS \
+              -o /tmp/dockerhub-create-repository.json \
+              -w "%{http_code}" \
+              -H "Authorization: Bearer ${hub_token}" \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "${create_payload}" \
+              "https://hub.docker.com/v2/namespaces/${namespace}/repositories"
+          )"
+
+          if [ "${create_status}" != "201" ]; then
+            cat /tmp/dockerhub-create-repository.json
+            exit 1
+          fi
+
+          echo "Created Docker Hub repository ${namespace}/${repository}."
+
       - name: Login to Docker Hub
         uses: docker/login-action@v4
         with:
