@@ -1,0 +1,28 @@
+services:
+  zfrontier:
+    build:
+      context: .
+    image: zfrontier-lottery:local
+    container_name: zfrontier-lottery
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HEADLESS: "1"
+      USE_CHROME: "0"
+      REPORT_HOST: "0.0.0.0"
+      REPORT_PORT: "8787"
+      CRAWL_INTERVAL_SECONDS: "3600"
+      RUN_ON_START: "1"
+      ZF_PROFILE_DIR: /data/browser-profile
+      ZF_ENGAGED_DB: /data/engaged-lotteries.sqlite
+      ZF_ENGAGED_HTML: /data/engaged-lotteries.html
+      CRAWLEE_STORAGE_DIR: /data/crawlee-storage
+    ports:
+      - "8787:8787"
+    volumes:
+      - zfrontier-data:/data
+
+volumes:
+  zfrontier-data:
+

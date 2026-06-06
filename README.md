@@ -71,3 +71,38 @@ npm run serve:report
 Then open `http://127.0.0.1:8787`.
 
 The server reads `ZF_ENGAGED_DB`, `REPORT_HOST`, and `REPORT_PORT` from `.env` or shell environment variables.
+
+## Docker
+
+Build and start the container:
+
+```sh
+docker compose up --build
+```
+
+The container runs two processes:
+
+- the Playwright crawler every hour
+- the Rust report server on `http://127.0.0.1:8787`
+
+State is stored in the `zfrontier-data` Docker volume at `/data`, including browser profile data, Crawlee storage, and `engaged-lotteries.sqlite`.
+
+Useful Docker env values:
+
+```sh
+CRAWL_INTERVAL_SECONDS=3600
+RUN_ON_START=1
+REPORT_PORT=8787
+```
+
+Build local images for both architectures:
+
+```sh
+scripts/build-multiarch.sh
+```
+
+That creates `zfrontier-lottery:latest-amd64` and `zfrontier-lottery:latest-arm64` locally. To publish one multi-arch image manifest to a registry:
+
+```sh
+IMAGE=registry.example.com/zfrontier-lottery:latest PUSH=1 scripts/build-multiarch.sh
+```

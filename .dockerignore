@@ -1,0 +1,12 @@
+.git
+.browser-profile
+.env
+engaged-lotteries.html
+engaged-lotteries.sqlite
+node_modules
+storage
+target
+npm-debug.log
+Dockerfile
+docker-compose.yml
+
