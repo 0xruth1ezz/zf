@@ -177,11 +177,35 @@ async function clickFirstVisible(page, selectorsOrLocators, timeout = 600) {
   for (const item of selectorsOrLocators) {
     const locator = typeof item === 'string' ? page.locator(item) : item;
     if (await isVisible(locator, timeout)) {
-      await locator.first().click();
-      return true;
+      if (await clickLocator(locator.first())) return true;
     }
   }
   return false;
+}
+
+async function clickLocator(locator) {
+  try {
+    await locator.click();
+    return true;
+  } catch (error) {
+    log.debug(`Normal click failed, trying fallback click: ${error.message}`);
+  }
+
+  try {
+    await locator.scrollIntoViewIfNeeded();
+    await locator.click({ force: true, timeout: 5000 });
+    return true;
+  } catch (error) {
+    log.debug(`Force click failed, trying DOM click: ${error.message}`);
+  }
+
+  return locator.evaluate((element) => {
+    element.click();
+    return true;
+  }).catch((error) => {
+    log.warning(`DOM click fallback failed: ${error.message}`);
+    return false;
+  });
 }
 
 async function hasCaptcha(page) {
@@ -776,14 +800,27 @@ async function main() {
     log.warning('Dry run is enabled. The crawler will not click lottery buttons.');
   }
 
+  const failedAccounts = [];
   for (const account of accounts) {
-    await runAccount(account, engagedStore, accounts.length);
+    try {
+      await runAccount(account, engagedStore, accounts.length);
+    } catch (error) {
+      failedAccounts.push(account.id);
+      log.error(`[${account.id}] Account run failed: ${error.message}`);
+    }
   }
 
   renderEngagementHtml(engagedStore);
   log.info(`Done. Recorded ${countEngagements(engagedStore)} engaged lottery posts and ${countSignIns(engagedStore)} daily sign-ins in ${ENGAGED_DB}.`);
+  if (failedAccounts.length > 0) {
+    log.warning(`Failed accounts this run: ${failedAccounts.join(', ')}`);
+  }
   log.info(`View records at ${ENGAGED_HTML}.`);
   engagedStore.db.close();
+
+  if (failedAccounts.length === accounts.length) {
+    throw new Error('All configured accounts failed.');
+  }
 }
 
 async function runAccount(account, engagedStore, accountCount) {
