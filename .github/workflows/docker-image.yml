@@ -13,7 +13,7 @@ env:
 jobs:
   build-rust-binaries:
     name: Build Rust binary (${{ matrix.docker_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     strategy:
@@ -21,11 +21,11 @@ jobs:
       matrix:
         include:
           - docker_arch: amd64
+            runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
-            rustflags: "-C link-arg=-fuse-ld=mold"
           - docker_arch: arm64
+            runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            rustflags: ""
 
     steps:
       - name: Checkout
@@ -36,10 +36,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            binutils-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            mold \
+            build-essential \
             pkg-config
+          sudo apt-get install -y --no-install-recommends mold
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,10 +54,7 @@ jobs:
       - name: Build report server
         shell: bash
         env:
-          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          RUSTFLAGS: ${{ matrix.rustflags }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: |
           cargo build --release --locked --target "${{ matrix.rust_target }}"
           mkdir -p "target/docker/${{ matrix.docker_arch }}"
