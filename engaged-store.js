@@ -3,6 +3,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
 const DEFAULT_ACCOUNT_ID = 'default';
+const CIRRUS_CSS_URL = 'https://cdn.jsdelivr.net/npm/cirrus-ui/dist/cirrus.min.css';
 
 function openEngagedStore(dbPath, htmlPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -226,10 +227,10 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           </tr>`).join('');
 
   const emptyLotteryState = lotteryRows.length === 0
-    ? '<p class="empty">No engaged lotteries have been recorded yet.</p>'
+    ? '<div class="empty card u-round-sm"><div class="content">No engaged lotteries have been recorded yet.</div></div>'
     : '';
   const emptySignInState = signInRows.length === 0
-    ? '<p class="empty">No daily sign-ins have been recorded yet.</p>'
+    ? '<div class="empty card u-round-sm"><div class="content">No daily sign-ins have been recorded yet.</div></div>'
     : '';
 
   return `<!doctype html>
@@ -238,9 +239,9 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>zFrontier Activity Report</title>
+    <link rel="stylesheet" href="${CIRRUS_CSS_URL}">
     <style>
       :root {
-        color-scheme: light;
         --bg: #f6f7f8;
         --fg: #1d252c;
         --muted: #66727d;
@@ -257,7 +258,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
       }
       main {
         width: min(1120px, calc(100vw - 32px));
-        margin: 32px auto;
+        margin: 32px auto 48px;
       }
       header {
         display: flex;
@@ -271,6 +272,14 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
         font-size: 26px;
         line-height: 1.2;
       }
+      .eyebrow {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
       .header-copy {
         display: grid;
         gap: 10px;
@@ -281,31 +290,17 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
         gap: 8px;
       }
       .page-nav a {
-        display: inline-flex;
-        align-items: center;
-        min-height: 32px;
-        padding: 5px 10px;
-        border: 1px solid var(--line);
-        background: var(--panel);
-        color: var(--fg);
-        font-size: 14px;
+        text-decoration: none;
       }
       .page-nav a[aria-current="page"] {
-        border-color: var(--accent);
         color: var(--accent);
       }
       section + section {
         margin-top: 28px;
       }
       .filters {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: end;
-        gap: 12px;
         margin: 0 0 24px;
         padding: 12px 14px;
-        border: 1px solid var(--line);
-        background: var(--panel);
       }
       .filter-field {
         display: grid;
@@ -319,13 +314,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
         text-transform: uppercase;
       }
       select {
-        min-height: 36px;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 6px 34px 6px 10px;
-        background: #fff;
-        color: var(--fg);
-        font: inherit;
+        width: 100%;
       }
       h2 {
         margin: 0 0 12px;
@@ -339,33 +328,30 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
       }
       .empty {
         margin: 0;
-        padding: 18px;
-        border: 1px solid var(--line);
-        background: var(--panel);
       }
       [hidden] {
         display: none !important;
       }
+      .report-table {
+        background: var(--panel);
+      }
       table {
         width: 100%;
-        border-collapse: collapse;
-        background: var(--panel);
-        border: 1px solid var(--line);
       }
-      th, td {
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--line);
-        text-align: left;
-        vertical-align: top;
+      .report-table table {
+        min-width: 760px;
+      }
+      .report-table th, .report-table td {
+        white-space: nowrap;
+      }
+      .lottery-table td:nth-child(3) {
+        min-width: 260px;
+        white-space: normal;
       }
       th {
-        color: var(--muted);
-        font-size: 12px;
         letter-spacing: 0.04em;
         text-transform: uppercase;
-        background: #fbfcfd;
       }
-      tr:last-child td { border-bottom: 0; }
       a {
         color: var(--accent);
         text-decoration: none;
@@ -387,17 +373,6 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
       }
       .pagination button {
         min-width: 72px;
-        padding: 6px 10px;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        background: var(--panel);
-        color: var(--fg);
-        font: inherit;
-        cursor: pointer;
-      }
-      .pagination button:hover:not(:disabled) {
-        border-color: var(--accent);
-        color: var(--accent);
       }
       .pagination button:disabled {
         cursor: not-allowed;
@@ -421,10 +396,11 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
     <main>
       <header>
         <div class="header-copy">
+          <p class="eyebrow">Activity</p>
           <h1>zFrontier Activity Report</h1>
           <nav class="page-nav" aria-label="Primary">
-            <a href="/" aria-current="page">Report</a>
-            <a href="/config">Configuration</a>
+            <a class="btn btn--sm btn-primary outline" href="/" aria-current="page">Report</a>
+            <a class="btn btn--sm btn-light" href="/config">Configuration</a>
           </nav>
         </div>
         <div class="meta">
@@ -434,10 +410,10 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           <div>Generated <time datetime="${escapeAttr(generatedAt)}" data-local-datetime>${escapeHtml(formatDate(generatedAt))}</time></div>
         </div>
       </header>
-      <section class="filters" aria-label="Report filters">
+      <section class="filters card u-round-sm" aria-label="Report filters">
         <label class="filter-field" for="account-filter">
           <span>Account</span>
-          <select id="account-filter" data-account-filter>
+          <select class="select input--sm" id="account-filter" data-account-filter>
             <option value="">All accounts</option>
             ${accountFilterOptions}
           </select>
@@ -446,7 +422,8 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
       <section>
         <h2>Engaged Lotteries</h2>
         ${emptyLotteryState}
-        ${lotteryRows.length > 0 ? `<table class="lottery-table" data-paginated-table data-page-size="20">
+        ${lotteryRows.length > 0 ? `<div class="table-container report-table" data-table-container>
+        <table class="table small striped lottery-table" data-paginated-table data-page-size="20">
           <thead>
             <tr>
               <th>#</th>
@@ -459,16 +436,18 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           <tbody>${lotteryTableRows}
           </tbody>
         </table>
+        </div>
         <div class="pagination" data-pagination hidden>
-          <button type="button" data-page-prev>Prev</button>
+          <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
           <span data-page-status></span>
-          <button type="button" data-page-next>Next</button>
+          <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
         </div>` : ''}
       </section>
       <section>
         <h2>Daily Sign-ins</h2>
         ${emptySignInState}
-        ${signInRows.length > 0 ? `<table data-paginated-table data-page-size="20">
+        ${signInRows.length > 0 ? `<div class="table-container report-table" data-table-container>
+        <table class="table small striped" data-paginated-table data-page-size="20">
           <thead>
             <tr>
               <th>#</th>
@@ -482,10 +461,11 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           <tbody>${signInTableRows}
           </tbody>
         </table>
+        </div>
         <div class="pagination" data-pagination hidden>
-          <button type="button" data-page-prev>Prev</button>
+          <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
           <span data-page-status></span>
-          <button type="button" data-page-next>Next</button>
+          <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
         </div>` : ''}
       </section>
     </main>
@@ -512,9 +492,12 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
 
         document.querySelectorAll('table[data-paginated-table]').forEach((table) => {
           const rows = Array.from(table.querySelectorAll('tbody tr'));
-          const controls = table.nextElementSibling?.matches('[data-pagination]')
-            ? table.nextElementSibling
-            : null;
+          const container = table.closest('[data-table-container]');
+          const controls = container?.nextElementSibling?.matches('[data-pagination]')
+            ? container.nextElementSibling
+            : table.nextElementSibling?.matches('[data-pagination]')
+              ? table.nextElementSibling
+              : null;
           const pageSize = Number(table.dataset.pageSize || 20);
           if (!controls || rows.length === 0 || pageSize <= 0) return;
 
@@ -549,7 +532,6 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
             renderPage();
           });
           next.addEventListener('click', () => {
-            if (page >= pageCount - 1) return;
             page += 1;
             renderPage();
           });

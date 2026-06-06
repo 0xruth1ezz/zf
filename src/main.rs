@@ -7,6 +7,8 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+const CIRRUS_CSS_URL: &str = "https://cdn.jsdelivr.net/npm/cirrus-ui/dist/cirrus.min.css";
+
 #[derive(Debug)]
 struct Record {
     account_id: String,
@@ -558,29 +560,29 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             let checked = if account.enabled { " checked" } else { "" };
             format!(
                 r#"
-          <div class="account-row">
+          <div class="account-row card u-round-sm">
             <form class="account-form" method="post" action="/config/accounts" autocomplete="off">
               <label>
                 <span>Account ID</span>
-                <input name="id" value="{}" readonly>
+                <input class="input--sm" name="id" value="{}" readonly>
               </label>
               <label>
                 <span>Phone</span>
-                <input name="phone" value="{}" inputmode="numeric" autocomplete="off" required>
+                <input class="input--sm" name="phone" value="{}" inputmode="numeric" autocomplete="off" required>
               </label>
               <label>
                 <span>Password</span>
-                <input name="password" type="password" value="" placeholder="Leave blank to keep" autocomplete="new-password">
+                <input class="input--sm" name="password" type="password" value="" placeholder="Leave blank to keep" autocomplete="new-password">
               </label>
               <label class="check">
                 <input name="enabled" type="checkbox" value="1"{}>
                 <span>Enabled</span>
               </label>
-              <button type="submit">Save</button>
+              <button class="btn-success btn--sm" type="submit">Save</button>
             </form>
             <form method="post" action="/config/accounts/delete">
               <input type="hidden" name="id" value="{}">
-              <button class="danger" type="submit">Delete</button>
+              <button class="danger btn-danger outline btn--sm" type="submit">Delete</button>
             </form>
             <div class="row-meta">
               <span>Created <time datetime="{}" data-local-datetime>{}</time></span>
@@ -600,7 +602,7 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .collect::<String>();
 
     let empty_accounts = if accounts.is_empty() {
-        r#"<p class="empty">No database accounts are configured yet. The crawler will keep using env fallback credentials until an enabled account is saved here.</p>"#
+        r#"<div class="empty card u-round-sm"><div class="content">No database accounts are configured yet. The crawler will keep using env fallback credentials until an enabled account is saved here.</div></div>"#
     } else {
         ""
     };
@@ -612,9 +614,9 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>zFrontier Configuration</title>
+    <link rel="stylesheet" href="{}">
     <style>
       :root {{
-        color-scheme: light;
         --bg: #f4f6f5;
         --fg: #18201f;
         --muted: #64706d;
@@ -622,7 +624,6 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         --panel: #ffffff;
         --accent: #007c6f;
         --danger: #b42318;
-        --focus: #f2c94c;
       }}
       * {{ box-sizing: border-box; }}
       body {{
@@ -632,8 +633,8 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }}
       main {{
-        width: min(1040px, calc(100vw - 32px));
-        margin: 32px auto;
+        width: min(1120px, calc(100vw - 32px));
+        margin: 32px auto 48px;
       }}
       header {{
         display: flex;
@@ -646,6 +647,14 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         margin: 0;
         font-size: 26px;
         line-height: 1.2;
+      }}
+      .eyebrow {{
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }}
       h2 {{
         margin: 0 0 12px;
@@ -663,20 +672,19 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         font-size: 14px;
         text-align: right;
       }}
-      .notice, .empty {{
+      .notice {{
         margin: 0 0 14px;
         padding: 12px 14px;
         border: 1px solid var(--line);
         background: var(--panel);
-      }}
-      .notice {{
         border-color: #96d4c8;
         background: #ebfaf6;
         color: #075e52;
       }}
+      .empty {{
+        margin: 0;
+      }}
       .account-row, .new-account {{
-        border: 1px solid var(--line);
-        background: var(--panel);
         padding: 14px;
       }}
       .account-row + .account-row {{
@@ -697,21 +705,10 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       }}
       input {{
         width: 100%;
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 7px 9px;
-        background: #fff;
-        color: var(--fg);
-        font: inherit;
       }}
       input[readonly] {{
         background: #f8f9f9;
         color: var(--muted);
-      }}
-      input:focus {{
-        outline: 2px solid var(--focus);
-        outline-offset: 1px;
       }}
       .check {{
         display: flex;
@@ -727,24 +724,8 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         width: 18px;
         min-height: 18px;
       }}
-      button {{
-        min-height: 38px;
-        border: 1px solid var(--accent);
-        border-radius: 4px;
-        padding: 7px 14px;
-        background: var(--accent);
-        color: #fff;
-        font: inherit;
-        cursor: pointer;
-      }}
-      button:hover {{
-        filter: brightness(0.95);
-      }}
       .danger {{
         margin-top: 10px;
-        border-color: var(--danger);
-        background: #fff;
-        color: var(--danger);
       }}
       .row-meta {{
         display: flex;
@@ -773,11 +754,12 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     <main>
       <header>
         <div>
+          <p class="eyebrow">Settings</p>
           <h1>zFrontier Configuration</h1>
         </div>
         <div class="meta">
           <div>{} configured accounts</div>
-          <div><a href="/">View report</a></div>
+          <div><a class="btn btn--sm btn-primary outline mt-1" href="/">View report</a></div>
         </div>
       </header>
       {}
@@ -788,24 +770,24 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       </section>
       <section>
         <h2>Add Account</h2>
-        <form class="new-account" method="post" action="/config/accounts" autocomplete="off">
+        <form class="new-account card u-round-sm" method="post" action="/config/accounts" autocomplete="off">
           <label>
             <span>Account ID</span>
-            <input name="id" placeholder="default" autocomplete="off" required>
+            <input class="input--sm" name="id" placeholder="default" autocomplete="off" required>
           </label>
           <label>
             <span>Phone</span>
-            <input name="phone" inputmode="numeric" autocomplete="off" required>
+            <input class="input--sm" name="phone" inputmode="numeric" autocomplete="off" required>
           </label>
           <label>
             <span>Password</span>
-            <input name="password" type="password" autocomplete="new-password" required>
+            <input class="input--sm" name="password" type="password" autocomplete="new-password" required>
           </label>
           <label class="check">
             <input name="enabled" type="checkbox" value="1" checked>
             <span>Enabled</span>
           </label>
-          <button type="submit">Add</button>
+          <button class="btn-success btn--sm" type="submit">Add</button>
         </form>
       </section>
     </main>
@@ -826,6 +808,7 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
   </body>
 </html>
 "#,
+        CIRRUS_CSS_URL,
         accounts.len(),
         notice,
         empty_accounts,
@@ -893,13 +876,13 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         .collect::<String>();
 
     let empty = if records.is_empty() {
-        r#"<p class="empty">No engaged lotteries have been recorded yet.</p>"#
+        r#"<div class="empty card u-round-sm"><div class="content">No engaged lotteries have been recorded yet.</div></div>"#
     } else {
         ""
     };
 
     let sign_in_empty = if sign_ins.is_empty() {
-        r#"<p class="empty">No daily sign-ins have been recorded yet.</p>"#
+        r#"<div class="empty card u-round-sm"><div class="content">No daily sign-ins have been recorded yet.</div></div>"#
     } else {
         ""
     };
@@ -908,7 +891,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<table class="lottery-table" data-paginated-table data-page-size="20">
+            r#"<div class="table-container report-table" data-table-container>
+        <table class="table small striped lottery-table" data-paginated-table data-page-size="20">
         <thead>
           <tr>
             <th>#</th>
@@ -921,10 +905,11 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         <tbody>{rows}
         </tbody>
       </table>
+      </div>
       <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Prev</button>
+        <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
         <span data-page-status></span>
-        <button type="button" data-page-next>Next</button>
+        <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
       </div>"#
         )
     };
@@ -933,7 +918,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<table data-paginated-table data-page-size="20">
+            r#"<div class="table-container report-table" data-table-container>
+        <table class="table small striped" data-paginated-table data-page-size="20">
         <thead>
           <tr>
             <th>#</th>
@@ -947,10 +933,11 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         <tbody>{sign_in_rows}
         </tbody>
       </table>
+      </div>
       <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Prev</button>
+        <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
         <span data-page-status></span>
-        <button type="button" data-page-next>Next</button>
+        <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
       </div>"#
         )
     };
@@ -962,9 +949,9 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>zFrontier Activity Report</title>
+    <link rel="stylesheet" href="{}">
     <style>
       :root {{
-        color-scheme: light;
         --bg: #f6f7f8;
         --fg: #1d252c;
         --muted: #66727d;
@@ -981,7 +968,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       }}
       main {{
         width: min(1120px, calc(100vw - 32px));
-        margin: 32px auto;
+        margin: 32px auto 48px;
       }}
       header {{
         display: flex;
@@ -995,6 +982,14 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         font-size: 26px;
         line-height: 1.2;
       }}
+      .eyebrow {{
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }}
       .header-copy {{
         display: grid;
         gap: 10px;
@@ -1005,31 +1000,17 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         gap: 8px;
       }}
       .page-nav a {{
-        display: inline-flex;
-        align-items: center;
-        min-height: 32px;
-        padding: 5px 10px;
-        border: 1px solid var(--line);
-        background: var(--panel);
-        color: var(--fg);
-        font-size: 14px;
+        text-decoration: none;
       }}
       .page-nav a[aria-current="page"] {{
-        border-color: var(--accent);
         color: var(--accent);
       }}
       section + section {{
         margin-top: 28px;
       }}
       .filters {{
-        display: flex;
-        flex-wrap: wrap;
-        align-items: end;
-        gap: 12px;
         margin: 0 0 24px;
         padding: 12px 14px;
-        border: 1px solid var(--line);
-        background: var(--panel);
       }}
       .filter-field {{
         display: grid;
@@ -1043,13 +1024,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         text-transform: uppercase;
       }}
       select {{
-        min-height: 36px;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 6px 34px 6px 10px;
-        background: #fff;
-        color: var(--fg);
-        font: inherit;
+        width: 100%;
       }}
       h2 {{
         margin: 0 0 12px;
@@ -1063,33 +1038,30 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       }}
       .empty {{
         margin: 0;
-        padding: 18px;
-        border: 1px solid var(--line);
-        background: var(--panel);
       }}
       [hidden] {{
         display: none !important;
       }}
+      .report-table {{
+        background: var(--panel);
+      }}
       table {{
         width: 100%;
-        border-collapse: collapse;
-        background: var(--panel);
-        border: 1px solid var(--line);
       }}
-      th, td {{
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--line);
-        text-align: left;
-        vertical-align: top;
+      .report-table table {{
+        min-width: 760px;
+      }}
+      .report-table th, .report-table td {{
+        white-space: nowrap;
+      }}
+      .lottery-table td:nth-child(3) {{
+        min-width: 260px;
+        white-space: normal;
       }}
       th {{
-        color: var(--muted);
-        font-size: 12px;
         letter-spacing: 0.04em;
         text-transform: uppercase;
-        background: #fbfcfd;
       }}
-      tr:last-child td {{ border-bottom: 0; }}
       a {{
         color: var(--accent);
         text-decoration: none;
@@ -1111,17 +1083,6 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       }}
       .pagination button {{
         min-width: 72px;
-        padding: 6px 10px;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        background: var(--panel);
-        color: var(--fg);
-        font: inherit;
-        cursor: pointer;
-      }}
-      .pagination button:hover:not(:disabled) {{
-        border-color: var(--accent);
-        color: var(--accent);
       }}
       .pagination button:disabled {{
         cursor: not-allowed;
@@ -1141,10 +1102,11 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
     <main>
       <header>
         <div class="header-copy">
+          <p class="eyebrow">Activity</p>
           <h1>zFrontier Activity Report</h1>
           <nav class="page-nav" aria-label="Primary">
-            <a href="/" aria-current="page">Report</a>
-            <a href="/config">Configuration</a>
+            <a class="btn btn--sm btn-primary outline" href="/" aria-current="page">Report</a>
+            <a class="btn btn--sm btn-light" href="/config">Configuration</a>
           </nav>
         </div>
         <div class="meta">
@@ -1154,10 +1116,10 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           <div>Generated <time datetime="{}" data-local-datetime>{}</time></div>
         </div>
       </header>
-      <section class="filters" aria-label="Report filters">
+      <section class="filters card u-round-sm" aria-label="Report filters">
         <label class="filter-field" for="account-filter">
           <span>Account</span>
-          <select id="account-filter" data-account-filter>
+          <select class="select input--sm" id="account-filter" data-account-filter>
             <option value="">All accounts</option>
             {}
           </select>
@@ -1190,9 +1152,12 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
 
         document.querySelectorAll('table[data-paginated-table]').forEach((table) => {{
           const rows = Array.from(table.querySelectorAll('tbody tr'));
-          const controls = table.nextElementSibling?.matches('[data-pagination]')
-            ? table.nextElementSibling
-            : null;
+          const container = table.closest('[data-table-container]');
+          const controls = container?.nextElementSibling?.matches('[data-pagination]')
+            ? container.nextElementSibling
+            : table.nextElementSibling?.matches('[data-pagination]')
+              ? table.nextElementSibling
+              : null;
           const pageSize = Number(table.dataset.pageSize || 20);
           if (!controls || rows.length === 0 || pageSize <= 0) return;
 
@@ -1227,7 +1192,6 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
             renderPage();
           }});
           next.addEventListener('click', () => {{
-            if (page >= pageCount - 1) return;
             page += 1;
             renderPage();
           }});
@@ -1244,6 +1208,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
   </body>
 </html>
 "#,
+        CIRRUS_CSS_URL,
         account_count,
         records.len(),
         sign_ins.len(),
