@@ -7,7 +7,479 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const CIRRUS_CSS_URL: &str = "https://cdn.jsdelivr.net/npm/cirrus-ui/dist/cirrus.min.css";
+const APP_CSS: &str = r#"
+      :root {
+        color-scheme: light;
+        --bg: oklch(0.967 0.006 178);
+        --surface: oklch(1 0 0);
+        --surface-muted: oklch(0.94 0.008 178);
+        --ink: oklch(0.24 0.018 190);
+        --ink-muted: oklch(0.44 0.018 190);
+        --line: oklch(0.86 0.011 185);
+        --line-strong: oklch(0.76 0.017 185);
+        --accent: oklch(0.47 0.09 178);
+        --accent-strong: oklch(0.39 0.087 178);
+        --accent-soft: oklch(0.91 0.038 178);
+        --danger: oklch(0.48 0.16 28);
+        --danger-soft: oklch(0.94 0.04 28);
+        --success: oklch(0.45 0.11 154);
+        --success-soft: oklch(0.92 0.04 154);
+        --focus: oklch(0.62 0.14 178);
+        --radius: 10px;
+        --radius-sm: 7px;
+      }
+      * { box-sizing: border-box; }
+      html { min-height: 100%; }
+      body {
+        min-height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      a {
+        color: var(--accent-strong);
+        text-decoration: none;
+      }
+      a:hover { text-decoration: underline; }
+      :focus-visible {
+        outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
+        outline-offset: 2px;
+      }
+      button,
+      .btn,
+      input,
+      select {
+        border-radius: var(--radius-sm);
+        font: inherit;
+      }
+      button,
+      .btn {
+        min-height: 34px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--ink);
+        cursor: pointer;
+        font-weight: 650;
+        letter-spacing: 0;
+        padding: 0 12px;
+        text-decoration: none;
+        text-transform: none;
+        transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+      }
+      button:hover,
+      .btn:hover {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent-strong);
+        text-decoration: none;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.52;
+      }
+      input,
+      select {
+        min-height: 36px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--ink);
+        padding: 0 10px;
+      }
+      input::placeholder { color: var(--ink-muted); opacity: 1; }
+      input[readonly] {
+        background: var(--surface-muted);
+        color: var(--ink-muted);
+      }
+      code {
+        color: var(--ink-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto 48px;
+      }
+      .app-bar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in oklch, var(--surface), var(--bg) 10%);
+      }
+      .app-bar__inner {
+        width: min(1180px, calc(100vw - 32px));
+        min-height: 64px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        min-width: 0;
+      }
+      .brand__mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: var(--accent);
+        color: white;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+      .brand__name {
+        margin: 0;
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 760;
+        line-height: 1.1;
+      }
+      .brand__sub {
+        margin: 3px 0 0;
+        color: var(--ink-muted);
+        font-size: 12px;
+        line-height: 1.2;
+      }
+      .app-nav {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .app-nav a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border-radius: 999px;
+        color: var(--ink-muted);
+        font-weight: 650;
+        text-decoration: none;
+      }
+      .app-nav a:hover {
+        background: var(--surface-muted);
+        color: var(--ink);
+      }
+      .app-nav a[aria-current="page"] {
+        background: var(--accent);
+        color: white;
+      }
+      .page-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 30px 0 22px;
+      }
+      .page-title {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.16;
+        letter-spacing: -0.015em;
+        text-wrap: balance;
+      }
+      .page-copy {
+        max-width: 66ch;
+        margin: 8px 0 0;
+        color: var(--ink-muted);
+      }
+      .metric-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .metric {
+        min-width: 112px;
+        padding: 9px 11px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+      .metric__label {
+        display: block;
+        color: var(--ink-muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .metric__value {
+        display: block;
+        margin-top: 2px;
+        color: var(--ink);
+        font-size: 16px;
+        font-weight: 760;
+      }
+      .toolbar {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 22px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+      .field {
+        display: grid;
+        gap: 6px;
+        min-width: 220px;
+      }
+      .field span,
+      label > span {
+        color: var(--ink-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      section + section { margin-top: 30px; }
+      .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+      .section-heading h2 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.25;
+        letter-spacing: -0.01em;
+      }
+      .section-note {
+        margin: 0;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .empty {
+        padding: 18px;
+        color: var(--ink-muted);
+      }
+      .empty strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+      }
+      [hidden] { display: none !important; }
+      .table-container {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .report-table table {
+        min-width: 980px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 11px 13px;
+        text-align: left;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+      th {
+        background: var(--surface-muted);
+        color: var(--ink-muted);
+        font-size: 12px;
+        font-weight: 760;
+      }
+      tbody tr:hover {
+        background: color-mix(in oklch, var(--accent-soft), white 45%);
+      }
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .lottery-table td:nth-child(3) {
+        min-width: 300px;
+        white-space: normal;
+      }
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      .pagination button {
+        min-width: 76px;
+      }
+      .notice {
+        margin: 0 0 18px;
+        padding: 12px 14px;
+        border: 1px solid color-mix(in oklch, var(--success), white 50%);
+        border-radius: var(--radius);
+        background: var(--success-soft);
+        color: oklch(0.32 0.09 154);
+      }
+      .account-row,
+      .new-account {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        padding: 14px;
+      }
+      .account-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px 16px;
+        align-items: start;
+      }
+      .account-row + .account-row {
+        margin-top: 10px;
+      }
+      .account-form,
+      .new-account {
+        display: grid;
+        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto;
+        gap: 12px;
+        align-items: end;
+      }
+      .new-account {
+        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto auto;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        color: var(--ink);
+      }
+      .check input {
+        width: 18px;
+        min-height: 18px;
+      }
+      .account-actions {
+        display: grid;
+        gap: 8px;
+        min-width: 84px;
+        padding-top: 26px;
+      }
+      .account-actions button,
+      .new-account button {
+        width: 100%;
+      }
+      .delete-form {
+        margin: 0;
+      }
+      .danger,
+      .btn-danger,
+      .action-danger {
+        border-color: color-mix(in oklch, var(--danger), white 35%);
+        color: var(--danger);
+      }
+      .danger:hover,
+      .btn-danger:hover,
+      .action-danger:hover {
+        border-color: var(--danger);
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+      .btn-success,
+      .action-primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: white;
+      }
+      .btn-success:hover,
+      .action-primary:hover {
+        border-color: var(--accent-strong);
+        background: var(--accent-strong);
+        color: white;
+      }
+      .row-meta {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 2px;
+        color: var(--ink-muted);
+        font-size: 12px;
+      }
+      @media (max-width: 860px) {
+        .app-bar__inner,
+        .page-header {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .app-nav,
+        .metric-strip {
+          justify-content: flex-start;
+        }
+        .toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .field {
+          min-width: 0;
+        }
+        .account-row {
+          grid-template-columns: 1fr;
+        }
+        .account-form,
+        .new-account {
+          grid-template-columns: 1fr;
+        }
+        .account-actions {
+          grid-template-columns: 1fr 1fr;
+          padding-top: 0;
+        }
+      }
+      @media (max-width: 720px) {
+        main,
+        .app-bar__inner {
+          width: min(100vw - 20px, 1180px);
+        }
+        .page-header {
+          padding-top: 22px;
+        }
+        .page-title {
+          font-size: 24px;
+        }
+        .section-heading {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .metric {
+          min-width: calc(50% - 4px);
+        }
+        .lottery-table th:nth-child(7),
+        .lottery-table td:nth-child(7) {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
+"#;
 
 #[derive(Debug)]
 struct Record {
@@ -119,7 +591,7 @@ fn handle_client(mut stream: TcpStream, config: &Config) -> std::io::Result<()> 
                 return write_unauthorized(&mut stream);
             }
 
-            let body = match render_report(&config.db_path) {
+            let body = match render_report(&config.db_path, &request.query) {
                 Ok(html) => html,
                 Err(error) => {
                     let error_html = format!(
@@ -638,6 +1110,63 @@ fn delete_account_from_form(db_path: &Path, body: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn render_app_bar(active_page: &str) -> String {
+    let nav_items = [
+        ("report", "Report", "/"),
+        ("config", "Configuration", "/config"),
+    ];
+    let nav = nav_items
+        .iter()
+        .map(|(id, label, href)| {
+            let current = if *id == active_page {
+                r#" aria-current="page""#
+            } else {
+                ""
+            };
+            format!(r#"<a href="{href}"{current}>{label}</a>"#)
+        })
+        .collect::<String>();
+
+    format!(
+        r#"
+    <div class="app-bar">
+      <div class="app-bar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">ZF</div>
+          <div class="brand__text">
+            <p class="brand__name">zFrontier Crawler</p>
+            <p class="brand__sub">Lottery and sign-in operations</p>
+          </div>
+        </div>
+        <nav class="app-nav" aria-label="Primary">{nav}</nav>
+      </div>
+    </div>"#
+    )
+}
+
+fn render_metric_strip(metrics: &[(&str, String)]) -> String {
+    let metric_items = metrics
+        .iter()
+        .map(|(label, value)| {
+            format!(
+                r#"
+            <div class="metric">
+              <span class="metric__label">{}</span>
+              <span class="metric__value">{}</span>
+            </div>"#,
+                escape_html(label),
+                escape_html(value)
+            )
+        })
+        .collect::<String>();
+
+    format!(
+        r#"
+          <div class="metric-strip">{metric_items}
+          </div>"#
+    )
+}
+
 fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     let accounts = load_accounts(db_path)?;
     let query_values = parse_form_urlencoded(query);
@@ -656,19 +1185,19 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             let form_id = format!("account-save-{}", account.id);
             format!(
                 r#"
-          <div class="account-row card u-round-sm">
+          <div class="account-row">
             <form id="{}" class="account-form" method="post" action="/config/accounts" autocomplete="off">
               <label>
                 <span>Account ID</span>
-                <input class="input--sm" name="id" value="{}" readonly>
+                <input name="id" value="{}" readonly>
               </label>
               <label>
                 <span>Phone</span>
-                <input class="input--sm" name="phone" value="{}" inputmode="numeric" autocomplete="off" required>
+                <input name="phone" value="{}" inputmode="numeric" autocomplete="off" required>
               </label>
               <label>
                 <span>Password</span>
-                <input class="input--sm" name="password" type="password" value="" placeholder="Leave blank to keep" autocomplete="new-password">
+                <input name="password" type="password" value="" placeholder="Leave blank to keep" autocomplete="new-password">
               </label>
               <label class="check">
                 <input name="enabled" type="checkbox" value="1"{}>
@@ -676,10 +1205,10 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
               </label>
             </form>
             <div class="account-actions">
-              <button class="btn-success btn--sm" type="submit" form="{}">Save</button>
+              <button class="action-primary" type="submit" form="{}">Save</button>
               <form class="delete-form" method="post" action="/config/accounts/delete">
                 <input type="hidden" name="id" value="{}">
-                <button class="danger btn-danger outline btn--sm" type="submit">Delete</button>
+                <button class="action-danger" type="submit">Delete</button>
               </form>
             </div>
             <div class="row-meta">
@@ -702,10 +1231,11 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .collect::<String>();
 
     let empty_accounts = if accounts.is_empty() {
-        r#"<div class="empty card u-round-sm"><div class="content">No database accounts are configured yet. The crawler will keep using env fallback credentials until an enabled account is saved here.</div></div>"#
+        r#"<div class="empty panel"><strong>No database accounts yet</strong><span>The crawler will keep using env fallback credentials until an enabled account is saved here.</span></div>"#
     } else {
         ""
     };
+    let metrics = render_metric_strip(&[("Accounts", accounts.len().to_string())]);
 
     Ok(format!(
         r#"<!doctype html>
@@ -714,212 +1244,56 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>zFrontier Configuration</title>
-    <link rel="stylesheet" href="{}">
     <style>
-      :root {{
-        --bg: #f4f6f5;
-        --fg: #18201f;
-        --muted: #64706d;
-        --line: #d7ddda;
-        --panel: #ffffff;
-        --accent: #007c6f;
-        --danger: #b42318;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }}
-      main {{
-        width: min(1120px, calc(100vw - 32px));
-        margin: 32px auto 48px;
-      }}
-      header {{
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 20px;
-        margin-bottom: 18px;
-      }}
-      h1 {{
-        margin: 0;
-        font-size: 26px;
-        line-height: 1.2;
-      }}
-      .eyebrow {{
-        margin: 0 0 4px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }}
-      h2 {{
-        margin: 0 0 12px;
-        font-size: 18px;
-        line-height: 1.3;
-      }}
-      a {{
-        color: var(--accent);
-        text-decoration: none;
-      }}
-      a:hover {{ text-decoration: underline; }}
-      section + section {{ margin-top: 28px; }}
-      .meta {{
-        color: var(--muted);
-        font-size: 14px;
-        text-align: right;
-      }}
-      .notice {{
-        margin: 0 0 14px;
-        padding: 12px 14px;
-        border: 1px solid var(--line);
-        background: var(--panel);
-        border-color: #96d4c8;
-        background: #ebfaf6;
-        color: #075e52;
-      }}
-      .empty {{
-        margin: 0;
-      }}
-      .account-row, .new-account {{
-        padding: 14px;
-      }}
-      .account-row {{
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px 16px;
-        align-items: start;
-      }}
-      .account-row + .account-row {{
-        margin-top: 10px;
-      }}
-      .account-form {{
-        display: grid;
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto;
-        gap: 12px;
-        align-items: end;
-      }}
-      .new-account {{
-        display: grid;
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto auto;
-        gap: 12px;
-        align-items: end;
-      }}
-      .account-actions {{
-        display: grid;
-        gap: 10px;
-        min-width: 82px;
-        padding-top: 27px;
-      }}
-      .account-actions button {{
-        width: 100%;
-      }}
-      .delete-form {{
-        margin: 0;
-      }}
-      label {{
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 12px;
-        text-transform: uppercase;
-      }}
-      input {{
-        width: 100%;
-      }}
-      input[readonly] {{
-        background: #f8f9f9;
-        color: var(--muted);
-      }}
-      .check {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 38px;
-        padding-bottom: 1px;
-        color: var(--fg);
-        font-size: 14px;
-        text-transform: none;
-      }}
-      .check input {{
-        width: 18px;
-        min-height: 18px;
-      }}
-      .danger {{
-        margin: 0;
-      }}
-      .row-meta {{
-        grid-column: 1 / -1;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 2px;
-        color: var(--muted);
-        font-size: 12px;
-      }}
-      @media (max-width: 860px) {{
-        header {{ display: block; }}
-        .meta {{
-          margin-top: 8px;
-          text-align: left;
-        }}
-        .account-row {{
-          grid-template-columns: 1fr;
-        }}
-        .account-form, .new-account {{
-          grid-template-columns: 1fr;
-        }}
-        .account-actions {{
-          grid-template-columns: 1fr 1fr;
-          padding-top: 0;
-        }}
-        button {{
-          width: 100%;
-        }}
-      }}
+{}
     </style>
   </head>
   <body>
+    {}
     <main>
-      <header>
+      <header class="page-header">
         <div>
-          <p class="eyebrow">Settings</p>
-          <h1>zFrontier Configuration</h1>
+          <h1 class="page-title">Configuration</h1>
+          <p class="page-copy">Manage the crawler accounts used for zFrontier sign-ins and lottery participation.</p>
         </div>
-        <div class="meta">
-          <div>{} configured accounts</div>
-          <div><a class="btn btn--sm btn-primary outline mt-1" href="/">View report</a></div>
-        </div>
+        {}
       </header>
       {}
       <section>
-        <h2>Accounts</h2>
+        <div class="section-heading">
+          <div>
+            <h2>Accounts</h2>
+            <p class="section-note">Enabled accounts are loaded before environment fallback credentials.</p>
+          </div>
+        </div>
         {}
         {}
       </section>
       <section>
-        <h2>Add Account</h2>
-        <form class="new-account card u-round-sm" method="post" action="/config/accounts" autocomplete="off">
+        <div class="section-heading">
+          <div>
+            <h2>Add account</h2>
+            <p class="section-note">Store credentials in the local SQLite database for crawler runs.</p>
+          </div>
+        </div>
+        <form class="new-account" method="post" action="/config/accounts" autocomplete="off">
           <label>
             <span>Account ID</span>
-            <input class="input--sm" name="id" placeholder="default" autocomplete="off" required>
+            <input name="id" placeholder="default" autocomplete="off" required>
           </label>
           <label>
             <span>Phone</span>
-            <input class="input--sm" name="phone" inputmode="numeric" autocomplete="off" required>
+            <input name="phone" inputmode="numeric" autocomplete="off" required>
           </label>
           <label>
             <span>Password</span>
-            <input class="input--sm" name="password" type="password" autocomplete="new-password" required>
+            <input name="password" type="password" autocomplete="new-password" required>
           </label>
           <label class="check">
             <input name="enabled" type="checkbox" value="1" checked>
             <span>Enabled</span>
           </label>
-          <button class="btn-success btn--sm" type="submit">Add</button>
+          <button class="action-primary" type="submit">Add</button>
         </form>
       </section>
     </main>
@@ -940,22 +1314,38 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
   </body>
 </html>
 "#,
-        CIRRUS_CSS_URL,
-        accounts.len(),
+        APP_CSS,
+        render_app_bar("config"),
+        metrics,
         notice,
         empty_accounts,
         account_rows,
     ))
 }
 
-fn render_report(db_path: &Path) -> rusqlite::Result<String> {
-    let records = load_records(db_path)?;
-    let sign_ins = load_sign_ins(db_path)?;
+fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
+    let query_values = parse_form_urlencoded(query);
+    let selected_account = query_values
+        .get("account")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let all_records = load_records(db_path)?;
+    let all_sign_ins = load_sign_ins(db_path)?;
     let accounts = load_accounts(db_path)?;
-    let account_count = unique_account_count(&records, &sign_ins, &accounts);
-    let account_filter_options =
-        render_account_filter_options(&report_account_ids(&records, &sign_ins, &accounts));
+    let account_ids = report_account_ids(&all_records, &all_sign_ins, &accounts);
+    let records = filter_records_by_account(&all_records, selected_account);
+    let sign_ins = filter_sign_ins_by_account(&all_sign_ins, selected_account);
+    let account_count = selected_account
+        .map(|account| usize::from(account_ids.iter().any(|id| id == account)))
+        .unwrap_or_else(|| unique_account_count(&all_records, &all_sign_ins, &accounts));
+    let account_filter_options = render_account_filter_options(&account_ids, selected_account);
     let generated_at = sqlite_now(db_path).unwrap_or_else(|_| "now".to_string());
+    let metrics = render_metric_strip(&[
+        ("Accounts", account_count.to_string()),
+        ("Lotteries", records.len().to_string()),
+        ("Sign-ins", sign_ins.len().to_string()),
+        ("Generated", generated_at.clone()),
+    ]);
     let rows = records
         .iter()
         .enumerate()
@@ -1012,13 +1402,13 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         .collect::<String>();
 
     let empty = if records.is_empty() {
-        r#"<div class="empty card u-round-sm"><div class="content">No engaged lotteries have been recorded yet.</div></div>"#
+        r#"<div class="empty panel"><strong>No engaged lotteries yet</strong><span>The crawler has not recorded any lottery engagement rows for the selected account.</span></div>"#
     } else {
         ""
     };
 
     let sign_in_empty = if sign_ins.is_empty() {
-        r#"<div class="empty card u-round-sm"><div class="content">No daily sign-ins have been recorded yet.</div></div>"#
+        r#"<div class="empty panel"><strong>No daily sign-ins yet</strong><span>Daily sign-in attempts will appear here after the crawler records them.</span></div>"#
     } else {
         ""
     };
@@ -1027,8 +1417,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<div class="table-container report-table" data-table-container>
-        <table class="table small striped lottery-table" data-paginated-table data-page-size="20">
+            r#"<div class="panel table-container report-table" data-table-container>
+        <table class="lottery-table" data-paginated-table data-page-size="20">
         <thead>
           <tr>
             <th>#</th>
@@ -1045,9 +1435,9 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       </table>
       </div>
       <div class="pagination" data-pagination hidden>
-        <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
+        <button type="button" data-page-prev>Prev</button>
         <span data-page-status></span>
-        <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
+        <button type="button" data-page-next>Next</button>
       </div>"#
         )
     };
@@ -1056,8 +1446,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<div class="table-container report-table" data-table-container>
-        <table class="table small striped" data-paginated-table data-page-size="20">
+            r#"<div class="panel table-container report-table" data-table-container>
+        <table data-paginated-table data-page-size="20">
         <thead>
           <tr>
             <th>#</th>
@@ -1073,9 +1463,9 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
       </table>
       </div>
       <div class="pagination" data-pagination hidden>
-        <button class="btn-light btn--sm" type="button" data-page-prev>Prev</button>
+        <button type="button" data-page-prev>Prev</button>
         <span data-page-status></span>
-        <button class="btn-light btn--sm" type="button" data-page-next>Next</button>
+        <button type="button" data-page-next>Next</button>
       </div>"#
         )
     };
@@ -1087,189 +1477,46 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>zFrontier Activity Report</title>
-    <link rel="stylesheet" href="{}">
     <style>
-      :root {{
-        --bg: #f6f7f8;
-        --fg: #1d252c;
-        --muted: #66727d;
-        --line: #d9dee3;
-        --panel: #ffffff;
-        --accent: #008879;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }}
-      main {{
-        width: min(1120px, calc(100vw - 32px));
-        margin: 32px auto 48px;
-      }}
-      header {{
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 24px;
-        margin-bottom: 18px;
-      }}
-      h1 {{
-        margin: 0;
-        font-size: 26px;
-        line-height: 1.2;
-      }}
-      .eyebrow {{
-        margin: 0 0 4px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }}
-      .header-copy {{
-        display: grid;
-        gap: 10px;
-      }}
-      .page-nav {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }}
-      .page-nav a {{
-        text-decoration: none;
-      }}
-      .page-nav a[aria-current="page"] {{
-        color: var(--accent);
-      }}
-      section + section {{
-        margin-top: 28px;
-      }}
-      .filters {{
-        margin: 0 0 24px;
-        padding: 12px 14px;
-      }}
-      .filter-field {{
-        display: grid;
-        gap: 6px;
-        min-width: 220px;
-      }}
-      .filter-field span {{
-        color: var(--muted);
-        font-size: 12px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-      }}
-      select {{
-        width: 100%;
-      }}
-      h2 {{
-        margin: 0 0 12px;
-        font-size: 18px;
-        line-height: 1.3;
-      }}
-      .meta {{
-        color: var(--muted);
-        font-size: 14px;
-        text-align: right;
-      }}
-      .empty {{
-        margin: 0;
-      }}
-      [hidden] {{
-        display: none !important;
-      }}
-      .report-table {{
-        background: var(--panel);
-      }}
-      table {{
-        width: 100%;
-      }}
-      .report-table table {{
-        min-width: 980px;
-      }}
-      .report-table th, .report-table td {{
-        white-space: nowrap;
-      }}
-      .lottery-table td:nth-child(3) {{
-        min-width: 260px;
-        white-space: normal;
-      }}
-      th {{
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-      }}
-      a {{
-        color: var(--accent);
-        text-decoration: none;
-      }}
-      a:hover {{ text-decoration: underline; }}
-      code {{
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 12px;
-        color: var(--muted);
-      }}
-      .pagination {{
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        color: var(--muted);
-        font-size: 14px;
-      }}
-      .pagination button {{
-        min-width: 72px;
-      }}
-      .pagination button:disabled {{
-        cursor: not-allowed;
-        opacity: 0.45;
-      }}
-      @media (max-width: 720px) {{
-        header {{ display: block; }}
-        .meta {{
-          margin-top: 8px;
-          text-align: left;
-        }}
-        .lottery-table th:nth-child(7), .lottery-table td:nth-child(7) {{ display: none; }}
-      }}
+{}
     </style>
   </head>
   <body>
+    {}
     <main>
-      <header>
-        <div class="header-copy">
-          <p class="eyebrow">Activity</p>
-          <h1>zFrontier Activity Report</h1>
-          <nav class="page-nav" aria-label="Primary">
-            <a class="btn btn--sm btn-primary outline" href="/" aria-current="page">Report</a>
-            <a class="btn btn--sm btn-light" href="/config">Configuration</a>
-          </nav>
+      <header class="page-header">
+        <div>
+          <h1 class="page-title">Activity report</h1>
+          <p class="page-copy">Review recorded lottery engagements, daily sign-ins, draw times, and account-specific activity from recent crawler runs.</p>
         </div>
-        <div class="meta">
-          <div>{} accounts</div>
-          <div>{} lotteries</div>
-          <div>{} sign-ins</div>
-          <div>Generated <time datetime="{}" data-local-datetime>{}</time></div>
-        </div>
+        {}
       </header>
-      <section class="filters card u-round-sm" aria-label="Report filters">
-        <label class="filter-field" for="account-filter">
+      <form class="toolbar" method="get" action="/report" aria-label="Report filters" data-report-filter>
+        <label class="field" for="account-filter">
           <span>Account</span>
-          <select class="select input--sm" id="account-filter" data-account-filter>
-            <option value="">All accounts</option>
+          <select id="account-filter" name="account" data-account-filter>
+            <option value=""{}>All accounts</option>
             {}
           </select>
         </label>
-      </section>
+      </form>
       <section>
-        <h2>Engaged Lotteries</h2>
+        <div class="section-heading">
+          <div>
+            <h2>Engaged lotteries</h2>
+            <p class="section-note">Posts the crawler has entered, including draw time and per-day engagement count.</p>
+          </div>
+        </div>
         {}
         {}
       </section>
       <section>
-        <h2>Daily Sign-ins</h2>
+        <div class="section-heading">
+          <div>
+            <h2>Daily sign-ins</h2>
+            <p class="section-note">One row per account and sign-in date, with status from the crawler run.</p>
+          </div>
+        </div>
         {}
         {}
       </section>
@@ -1279,6 +1526,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         const pad = (value) => String(value).padStart(2, '0');
         const formatLocalDateTime = (date) => `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}} ${{pad(date.getHours())}}:${{pad(date.getMinutes())}}:${{pad(date.getSeconds())}}`;
         const accountFilter = document.querySelector('[data-account-filter]');
+        const reportFilter = document.querySelector('[data-report-filter]');
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {{
           const value = node.getAttribute('datetime');
@@ -1333,25 +1581,30 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
             page += 1;
             renderPage();
           }});
-          accountFilter?.addEventListener('change', () => {{
-            page = 0;
-            renderPage();
-          }});
-
           controls.hidden = false;
           renderPage();
+        }});
+
+        accountFilter?.addEventListener('change', () => {{
+          if (reportFilter?.requestSubmit) {{
+            reportFilter.requestSubmit();
+          }} else {{
+            reportFilter?.submit();
+          }}
         }});
       }})();
     </script>
   </body>
 </html>
 "#,
-        CIRRUS_CSS_URL,
-        account_count,
-        records.len(),
-        sign_ins.len(),
-        escape_attr(&generated_at),
-        escape_html(&generated_at),
+        APP_CSS,
+        render_app_bar("report"),
+        metrics,
+        if selected_account.is_none() {
+            " selected"
+        } else {
+            ""
+        },
         account_filter_options,
         empty,
         table,
@@ -1378,13 +1631,47 @@ fn report_account_ids(
     account_ids.into_iter().collect()
 }
 
-fn render_account_filter_options(account_ids: &[String]) -> String {
+fn filter_records_by_account<'a>(
+    records: &'a [Record],
+    selected_account: Option<&str>,
+) -> Vec<&'a Record> {
+    records
+        .iter()
+        .filter(|record| {
+            selected_account
+                .map(|account| record.account_id == account)
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn filter_sign_ins_by_account<'a>(
+    sign_ins: &'a [SignInRecord],
+    selected_account: Option<&str>,
+) -> Vec<&'a SignInRecord> {
+    sign_ins
+        .iter()
+        .filter(|record| {
+            selected_account
+                .map(|account| record.account_id == account)
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn render_account_filter_options(account_ids: &[String], selected_account: Option<&str>) -> String {
     account_ids
         .iter()
         .map(|account_id| {
+            let selected = if selected_account == Some(account_id.as_str()) {
+                " selected"
+            } else {
+                ""
+            };
             format!(
-                r#"<option value="{}">{}</option>"#,
+                r#"<option value="{}"{}>{}</option>"#,
                 escape_attr(account_id),
+                selected,
                 escape_html(account_id)
             )
         })
