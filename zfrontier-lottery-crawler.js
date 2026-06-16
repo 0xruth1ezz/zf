@@ -8,7 +8,7 @@ const { chromium } = require('playwright');
 const {
   countEngagements,
   countSignIns,
-  hasEngagement,
+  getEngagement,
   hasSignIn,
   listAccounts,
   openEngagedStore,
@@ -30,6 +30,10 @@ const ENGAGED_HTML = process.env.ZF_ENGAGED_HTML || path.join(ROOT_DIR, 'engaged
 const CONFIG = {
   publishWindowDays: numberFromEnv('ZF_DAYS', 7),
   signInTimeZone: process.env.ZF_SIGN_IN_TZ || 'Asia/Shanghai',
+  lotteryEngagementsPerDay: Math.max(1, numberFromEnv(
+    'ZF_LOTTERY_ENGAGEMENTS_PER_DAY',
+    numberFromEnv('LOTTERY_ENGAGEMENTS_PER_DAY', 2),
+  )),
   maxScrolls: numberFromEnv('MAX_SCROLLS', 80),
   maxPosts: numberFromEnv('MAX_POSTS', 0),
   scrollWaitMs: numberFromEnv('SCROLL_WAIT_MS', 1200),
@@ -163,6 +167,27 @@ function dateKeyForTimeZone(date = new Date(), timeZone = CONFIG.signInTimeZone)
   }).formatToParts(date);
   const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
+}
+
+function dateTimeMinuteKeyForTimeZone(date = new Date(), timeZone = CONFIG.signInTimeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return [
+    valueByType.year,
+    valueByType.month,
+    valueByType.day,
+  ].join('-') + ' ' + [
+    valueByType.hour,
+    valueByType.minute,
+  ].join(':');
 }
 
 async function isVisible(locator, timeout = 500) {
@@ -500,7 +525,7 @@ function parsePublishedAtFromText(text, now = new Date()) {
   return { publishedAt: null, publishedText: '' };
 }
 
-function parseChineseDate(rawText) {
+function normalizeChineseDateText(rawText) {
   const cleaned = rawText
     .replace(/[年月]/g, '-')
     .replace(/[日号]/g, '')
@@ -509,6 +534,15 @@ function parseChineseDate(rawText) {
     .replace(/\s+/g, ' ')
     .trim();
   const match = cleaned.match(/^(20\d{2})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  if (!match) return '';
+  const pad = (value) => String(value).padStart(2, '0');
+  const dateText = `${match[1]}-${pad(match[2])}-${pad(match[3])}`;
+  return match[4] ? `${dateText} ${pad(match[4])}:${match[5]}` : dateText;
+}
+
+function parseChineseDate(rawText) {
+  const normalized = normalizeChineseDateText(rawText);
+  const match = normalized.match(/^(20\d{2})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2}))?$/);
   if (!match) return null;
   return new Date(
     Number(match[1]),
@@ -521,6 +555,48 @@ function parseChineseDate(rawText) {
   );
 }
 
+function parseDrawAtFromText(text) {
+  const normalized = compactText(text);
+  const match = normalized.match(/(?:抽签|抽奖|开奖)\s*时间\s*[：:]?\s*((?:20\d{2})[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}(?:[日号])?\s+\d{1,2}:\d{2})/);
+  if (!match) return { drawAt: '', drawText: '' };
+
+  return {
+    drawAt: normalizeChineseDateText(match[1]),
+    drawText: match[1],
+  };
+}
+
+function isDrawTimeCompleted(drawAt, now = new Date()) {
+  const normalized = normalizeChineseDateText(drawAt);
+  return Boolean(normalized && normalized <= dateTimeMinuteKeyForTimeZone(now));
+}
+
+function hasCompletedLotteryText(text) {
+  return /已开奖|开奖已结束|活动已结束|抽奖已结束|抽签已结束|本活动已结束/.test(text || '');
+}
+
+function isLotteryCompleted(bodyText, drawAt) {
+  return isDrawTimeCompleted(drawAt) || hasCompletedLotteryText(bodyText);
+}
+
+function dailyEngagementCountFor(record, dateKey) {
+  if (!record || record.lastEngagedDate !== dateKey) return 0;
+  return Math.max(0, Number(record.dailyEngagementCount) || 0);
+}
+
+function saveExistingEngagementMetadata(store, existingEngagement, updates) {
+  saveEngagement(store, {
+    accountId: existingEngagement.accountId,
+    postId: existingEngagement.postId,
+    url: existingEngagement.url || updates.url,
+    title: existingEngagement.title || updates.title || updates.url,
+    drawAt: updates.drawAt || existingEngagement.drawAt || '',
+    lastEngagedDate: existingEngagement.lastEngagedDate || '',
+    dailyEngagementCount: Number(existingEngagement.dailyEngagementCount) || 1,
+    engagedAt: existingEngagement.engagedAt,
+  });
+}
+
 async function extractPostMeta(page, request) {
   const text = await page.locator('body').innerText({ timeout: 30000 });
   const title = await page.title().then((value) => value.replace(/\s+-\s+zFrontier.*$/i, '').trim()).catch(() => '');
@@ -528,10 +604,13 @@ async function extractPostMeta(page, request) {
   const publishLineMatch = text.match(/([^\n]*(?:秒|分钟|小时|天)前\s+从\s+[^\n]+发布|[^\n]*(?:昨天|前天)\s+\d{1,2}:\d{2}\s+从\s+[^\n]+发布|[^\n]*20\d{2}[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}[日号]?(?:\s+\d{1,2}:\d{2})?\s+从\s+[^\n]+发布)/);
   const publishSource = publishLineMatch ? publishLineMatch[1] : `${request.userData.listText || ''} ${text.slice(0, 3000)}`;
   const parsed = parsePublishedAtFromText(publishSource);
+  const draw = parseDrawAtFromText(text);
 
   return {
     title,
     bodyText: text,
+    drawAt: draw.drawAt,
+    drawText: draw.drawText,
     publishedAt: parsed.publishedAt,
     publishedText: parsed.publishedText,
     publishSource: compactText(publishSource),
@@ -735,8 +814,16 @@ async function engageLottery(page) {
 async function processPost(page, postRequest, engagedStore, account) {
   const postUrl = normalizePostUrl(postRequest.url);
   const postId = postIdFromUrl(postUrl);
-  if (hasEngagement(engagedStore, account.id, postId)) {
-    log.info(`[${account.id}] Skipping ${postId}: already recorded in ${path.basename(ENGAGED_DB)}.`);
+  const today = dateKeyForTimeZone();
+  const existingEngagement = getEngagement(engagedStore, account.id, postId);
+  if (existingEngagement?.drawAt && isDrawTimeCompleted(existingEngagement.drawAt)) {
+    log.info(`[${account.id}] Skipping ${postId}: draw time ${existingEngagement.drawAt} has passed.`);
+    return;
+  }
+
+  const existingDailyCount = dailyEngagementCountFor(existingEngagement, today);
+  if (existingEngagement?.drawAt && existingDailyCount >= CONFIG.lotteryEngagementsPerDay) {
+    log.info(`[${account.id}] Skipping ${postId}: already engaged ${existingDailyCount}/${CONFIG.lotteryEngagementsPerDay} times for ${today}.`);
     return;
   }
 
@@ -744,6 +831,26 @@ async function processPost(page, postRequest, engagedStore, account) {
   await waitForManualCheckpoint(page, `Opening post ${postId}`);
   await ensureLoggedIn(page, account, postUrl);
   const meta = await extractPostMeta(page, postRequest);
+  const drawAt = meta.drawAt || existingEngagement?.drawAt || '';
+
+  if (existingEngagement && meta.drawAt && meta.drawAt !== existingEngagement.drawAt) {
+    saveExistingEngagementMetadata(engagedStore, existingEngagement, {
+      url: postUrl,
+      title: meta.title,
+      drawAt: meta.drawAt,
+    });
+    renderEngagementHtml(engagedStore);
+    log.info(`[${account.id}] Backfilled draw time for ${postId}: ${meta.drawAt}.`);
+  }
+
+  if (isLotteryCompleted(meta.bodyText, drawAt)) {
+    const reason = drawAt
+      ? `draw time ${drawAt} has passed`
+      : 'page shows the lottery as completed';
+    log.info(`[${account.id}] Skipping ${postId}: ${reason}.`);
+    return;
+  }
+
   const hasLottery = meta.bodyText.includes('抽奖');
 
   if (!hasLottery) {
@@ -751,9 +858,15 @@ async function processPost(page, postRequest, engagedStore, account) {
     return;
   }
 
-  if (!isWithinPublishWindow(meta.publishedAt)) {
+  if (!existingEngagement && !isWithinPublishWindow(meta.publishedAt)) {
     const dateText = meta.publishedAt ? meta.publishedAt.toISOString() : 'unknown date';
     log.info(`[${account.id}] Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.publishWindowDays} days.`);
+    return;
+  }
+
+  const dailyCount = dailyEngagementCountFor(existingEngagement, today);
+  if (dailyCount >= CONFIG.lotteryEngagementsPerDay) {
+    log.info(`[${account.id}] Skipping ${postId}: already engaged ${dailyCount}/${CONFIG.lotteryEngagementsPerDay} times for ${today}.`);
     return;
   }
 
@@ -777,10 +890,13 @@ async function processPost(page, postRequest, engagedStore, account) {
     postId,
     url: postUrl,
     title: meta.title,
+    drawAt,
+    lastEngagedDate: today,
+    dailyEngagementCount: dailyCount + 1,
     engagedAt,
   });
   renderEngagementHtml(engagedStore);
-  log.info(`[${account.id}] Recorded engaged lottery post ${postId}: ${meta.title || postUrl}`);
+  log.info(`[${account.id}] Recorded engaged lottery post ${postId} (${dailyCount + 1}/${CONFIG.lotteryEngagementsPerDay} for ${today}): ${meta.title || postUrl}`);
 }
 
 async function main() {

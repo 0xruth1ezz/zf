@@ -16,6 +16,9 @@ function openEngagedStore(dbPath, htmlPath) {
       post_id TEXT NOT NULL,
       title TEXT NOT NULL,
       url TEXT NOT NULL,
+      draw_at TEXT NOT NULL DEFAULT '',
+      last_engaged_date TEXT NOT NULL DEFAULT '',
+      daily_engagement_count INTEGER NOT NULL DEFAULT 0,
       engaged_at TEXT NOT NULL,
       PRIMARY KEY (account_id, post_id),
       UNIQUE (account_id, url)
@@ -46,6 +49,10 @@ function openEngagedStore(dbPath, htmlPath) {
     CREATE INDEX IF NOT EXISTS idx_zfrontier_accounts_enabled
       ON zfrontier_accounts (enabled, id);
   `);
+  addColumnIfMissing(db, 'engaged_lotteries', 'draw_at', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, 'engaged_lotteries', 'last_engaged_date', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, 'engaged_lotteries', 'daily_engagement_count', 'INTEGER NOT NULL DEFAULT 0');
+  backfillEngagementDailyState(db);
 
   return { db, dbPath, htmlPath };
 }
@@ -58,6 +65,9 @@ function migrateLegacyEngagements(db) {
   const accountExpr = columns.some((column) => column.name === 'account_id')
     ? `COALESCE(NULLIF(account_id, ''), '${DEFAULT_ACCOUNT_ID}')`
     : `'${DEFAULT_ACCOUNT_ID}'`;
+  const drawAtExpr = legacyColumnExpr(columns, 'draw_at', "''");
+  const lastEngagedDateExpr = legacyColumnExpr(columns, 'last_engaged_date', "substr(engaged_at, 1, 10)");
+  const dailyEngagementCountExpr = legacyColumnExpr(columns, 'daily_engagement_count', '1');
 
   db.exec(`
     DROP TABLE IF EXISTS ${legacyTable};
@@ -67,12 +77,15 @@ function migrateLegacyEngagements(db) {
       post_id TEXT NOT NULL,
       title TEXT NOT NULL,
       url TEXT NOT NULL,
+      draw_at TEXT NOT NULL DEFAULT '',
+      last_engaged_date TEXT NOT NULL DEFAULT '',
+      daily_engagement_count INTEGER NOT NULL DEFAULT 0,
       engaged_at TEXT NOT NULL,
       PRIMARY KEY (account_id, post_id),
       UNIQUE (account_id, url)
     );
-    INSERT OR IGNORE INTO engaged_lotteries (account_id, post_id, title, url, engaged_at)
-      SELECT ${accountExpr}, post_id, title, url, engaged_at
+    INSERT OR IGNORE INTO engaged_lotteries (account_id, post_id, title, url, draw_at, last_engaged_date, daily_engagement_count, engaged_at)
+      SELECT ${accountExpr}, post_id, title, url, ${drawAtExpr}, ${lastEngagedDateExpr}, ${dailyEngagementCountExpr}, engaged_at
       FROM ${legacyTable};
     DROP TABLE ${legacyTable};
   `);
@@ -118,21 +131,95 @@ function isCompositePrimaryKey(columns, names) {
   });
 }
 
+function addColumnIfMissing(db, tableName, columnName, definition) {
+  const columns = tableColumns(db, tableName);
+  if (columns.some((column) => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function legacyColumnExpr(columns, columnName, fallback) {
+  return columns.some((column) => column.name === columnName)
+    ? `COALESCE(${columnName}, ${fallback})`
+    : fallback;
+}
+
+function backfillEngagementDailyState(db) {
+  db.exec(`
+    UPDATE engaged_lotteries
+    SET
+      last_engaged_date = CASE
+        WHEN last_engaged_date = '' THEN substr(engaged_at, 1, 10)
+        ELSE last_engaged_date
+      END,
+      daily_engagement_count = CASE
+        WHEN daily_engagement_count <= 0 THEN 1
+        ELSE daily_engagement_count
+      END
+    WHERE engaged_at != ''
+      AND (last_engaged_date = '' OR daily_engagement_count <= 0)
+  `);
+}
+
+function getEngagement(store, accountId, postId) {
+  return store.db.prepare(`
+    SELECT
+      account_id AS accountId,
+      post_id AS postId,
+      title,
+      url,
+      draw_at AS drawAt,
+      last_engaged_date AS lastEngagedDate,
+      daily_engagement_count AS dailyEngagementCount,
+      engaged_at AS engagedAt
+    FROM engaged_lotteries
+    WHERE account_id = ? AND post_id = ?
+  `).get(accountId, postId);
+}
+
 function hasEngagement(store, accountId, postId) {
-  return Boolean(store.db.prepare(`
-    SELECT 1 FROM engaged_lotteries WHERE account_id = ? AND post_id = ?
-  `).get(accountId, postId));
+  return Boolean(getEngagement(store, accountId, postId));
 }
 
 function saveEngagement(store, record) {
+  const dailyEngagementCount = Number(record.dailyEngagementCount);
   store.db.prepare(`
-    INSERT INTO engaged_lotteries (account_id, post_id, title, url, engaged_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO engaged_lotteries (
+      account_id,
+      post_id,
+      title,
+      url,
+      draw_at,
+      last_engaged_date,
+      daily_engagement_count,
+      engaged_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(account_id, post_id) DO UPDATE SET
       title = excluded.title,
       url = excluded.url,
+      draw_at = CASE
+        WHEN excluded.draw_at != '' THEN excluded.draw_at
+        ELSE engaged_lotteries.draw_at
+      END,
+      last_engaged_date = CASE
+        WHEN excluded.last_engaged_date != '' THEN excluded.last_engaged_date
+        ELSE engaged_lotteries.last_engaged_date
+      END,
+      daily_engagement_count = CASE
+        WHEN excluded.last_engaged_date != '' THEN excluded.daily_engagement_count
+        ELSE engaged_lotteries.daily_engagement_count
+      END,
       engaged_at = excluded.engaged_at
-  `).run(record.accountId, record.postId, record.title || record.url, record.url, record.engagedAt);
+  `).run(
+    record.accountId,
+    record.postId,
+    record.title || record.url,
+    record.url,
+    record.drawAt || '',
+    record.lastEngagedDate || record.dailyEngagementDate || '',
+    Number.isFinite(dailyEngagementCount) && dailyEngagementCount > 0 ? dailyEngagementCount : 1,
+    record.engagedAt,
+  );
 }
 
 function hasSignIn(store, accountId, signInDate) {
@@ -170,7 +257,15 @@ function countSignIns(store) {
 
 function listEngagements(store) {
   return store.db.prepare(`
-    SELECT account_id AS accountId, post_id AS postId, title, url, engaged_at AS engagedAt
+    SELECT
+      account_id AS accountId,
+      post_id AS postId,
+      title,
+      url,
+      draw_at AS drawAt,
+      last_engaged_date AS lastEngagedDate,
+      daily_engagement_count AS dailyEngagementCount,
+      engaged_at AS engagedAt
     FROM engaged_lotteries
     ORDER BY engaged_at DESC
   `).all();
@@ -213,6 +308,8 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
             <td>${index + 1}</td>
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><a href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.title)}</a></td>
+            <td>${renderDrawTime(row.drawAt)}</td>
+            <td>${renderDailyEngagementCount(row)}</td>
             <td><time datetime="${escapeAttr(row.engagedAt)}" data-local-datetime>${escapeHtml(formatDate(row.engagedAt))}</time></td>
             <td><code>${escapeHtml(row.postId)}</code></td>
           </tr>`).join('');
@@ -339,7 +436,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
         width: 100%;
       }
       .report-table table {
-        min-width: 760px;
+        min-width: 980px;
       }
       .report-table th, .report-table td {
         white-space: nowrap;
@@ -386,7 +483,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
           margin-top: 8px;
           text-align: left;
         }
-        .lottery-table th:nth-child(5), .lottery-table td:nth-child(5) {
+        .lottery-table th:nth-child(7), .lottery-table td:nth-child(7) {
           display: none;
         }
       }
@@ -429,6 +526,8 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
               <th>#</th>
               <th>Account</th>
               <th>Title</th>
+              <th>Draw Time</th>
+              <th>Daily Count</th>
               <th>Engaged Date</th>
               <th>Post ID</th>
             </tr>
@@ -556,6 +655,19 @@ function formatDate(value) {
   return formatLocalDateTime(date);
 }
 
+function renderDrawTime(value) {
+  const drawAt = String(value || '').trim();
+  if (!drawAt) return '-';
+  return `<time datetime="${escapeAttr(drawAt)}">${escapeHtml(drawAt)}</time>`;
+}
+
+function renderDailyEngagementCount(row) {
+  const count = Number(row.dailyEngagementCount) || 0;
+  const date = String(row.lastEngagedDate || '').trim();
+  if (!date || count <= 0) return '-';
+  return `${escapeHtml(date)}: ${count}`;
+}
+
 function formatLocalDateTime(date) {
   const pad = (value) => String(value).padStart(2, '0');
   return [
@@ -606,6 +718,7 @@ function escapeAttr(value) {
 module.exports = {
   countEngagements,
   countSignIns,
+  getEngagement,
   hasEngagement,
   hasSignIn,
   listAccounts,

@@ -15,6 +15,9 @@ struct Record {
     post_id: String,
     title: String,
     url: String,
+    draw_at: String,
+    last_engaged_date: String,
+    daily_engagement_count: i64,
     engaged_at: String,
 }
 
@@ -282,6 +285,9 @@ fn ensure_schema(db_path: &Path) -> rusqlite::Result<()> {
           post_id TEXT NOT NULL,
           title TEXT NOT NULL,
           url TEXT NOT NULL,
+          draw_at TEXT NOT NULL DEFAULT '',
+          last_engaged_date TEXT NOT NULL DEFAULT '',
+          daily_engagement_count INTEGER NOT NULL DEFAULT 0,
           engaged_at TEXT NOT NULL,
           PRIMARY KEY (account_id, post_id),
           UNIQUE (account_id, url)
@@ -313,6 +319,25 @@ fn ensure_schema(db_path: &Path) -> rusqlite::Result<()> {
           ON zfrontier_accounts (enabled, id);
         "#,
     )?;
+    add_column_if_missing(
+        &conn,
+        "engaged_lotteries",
+        "draw_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        &conn,
+        "engaged_lotteries",
+        "last_engaged_date",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        &conn,
+        "engaged_lotteries",
+        "daily_engagement_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    backfill_engagement_daily_state(&conn)?;
     Ok(())
 }
 
@@ -327,6 +352,10 @@ fn migrate_legacy_engagements(conn: &Connection) -> rusqlite::Result<()> {
     } else {
         "'default'"
     };
+    let draw_at_expr = legacy_column_expr(&columns, "draw_at", "''");
+    let last_engaged_date_expr =
+        legacy_column_expr(&columns, "last_engaged_date", "substr(engaged_at, 1, 10)");
+    let daily_engagement_count_expr = legacy_column_expr(&columns, "daily_engagement_count", "1");
     conn.execute_batch(&format!(
         r#"
         DROP TABLE IF EXISTS engaged_lotteries_legacy_migration;
@@ -336,12 +365,24 @@ fn migrate_legacy_engagements(conn: &Connection) -> rusqlite::Result<()> {
           post_id TEXT NOT NULL,
           title TEXT NOT NULL,
           url TEXT NOT NULL,
+          draw_at TEXT NOT NULL DEFAULT '',
+          last_engaged_date TEXT NOT NULL DEFAULT '',
+          daily_engagement_count INTEGER NOT NULL DEFAULT 0,
           engaged_at TEXT NOT NULL,
           PRIMARY KEY (account_id, post_id),
           UNIQUE (account_id, url)
         );
-        INSERT OR IGNORE INTO engaged_lotteries (account_id, post_id, title, url, engaged_at)
-          SELECT {account_expr}, post_id, title, url, engaged_at
+        INSERT OR IGNORE INTO engaged_lotteries (
+          account_id,
+          post_id,
+          title,
+          url,
+          draw_at,
+          last_engaged_date,
+          daily_engagement_count,
+          engaged_at
+        )
+          SELECT {account_expr}, post_id, title, url, {draw_at_expr}, {last_engaged_date_expr}, {daily_engagement_count_expr}, engaged_at
           FROM engaged_lotteries_legacy_migration;
         DROP TABLE engaged_lotteries_legacy_migration;
         "#
@@ -404,11 +445,62 @@ fn is_composite_primary_key(columns: &[TableColumn], names: &[&str]) -> bool {
     })
 }
 
+fn add_column_if_missing(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let columns = table_columns(conn, table_name)?;
+    if columns.iter().any(|column| column.name == column_name) {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+    ))
+}
+
+fn legacy_column_expr(columns: &[TableColumn], column_name: &str, fallback: &str) -> String {
+    if columns.iter().any(|column| column.name == column_name) {
+        format!("COALESCE({column_name}, {fallback})")
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn backfill_engagement_daily_state(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        UPDATE engaged_lotteries
+        SET
+          last_engaged_date = CASE
+            WHEN last_engaged_date = '' THEN substr(engaged_at, 1, 10)
+            ELSE last_engaged_date
+          END,
+          daily_engagement_count = CASE
+            WHEN daily_engagement_count <= 0 THEN 1
+            ELSE daily_engagement_count
+          END
+        WHERE engaged_at != ''
+          AND (last_engaged_date = '' OR daily_engagement_count <= 0)
+        "#,
+    )
+}
+
 fn load_records(db_path: &Path) -> rusqlite::Result<Vec<Record>> {
     let conn = Connection::open(db_path)?;
     let mut stmt = conn.prepare(
         r#"
-        SELECT account_id, post_id, title, url, engaged_at
+        SELECT
+          account_id,
+          post_id,
+          title,
+          url,
+          draw_at,
+          last_engaged_date,
+          daily_engagement_count,
+          engaged_at
         FROM engaged_lotteries
         ORDER BY engaged_at DESC
         "#,
@@ -421,7 +513,10 @@ fn load_records(db_path: &Path) -> rusqlite::Result<Vec<Record>> {
                 post_id: row.get(1)?,
                 title: row.get(2)?,
                 url: row.get(3)?,
-                engaged_at: row.get(4)?,
+                draw_at: row.get(4)?,
+                last_engaged_date: row.get(5)?,
+                daily_engagement_count: row.get(6)?,
+                engaged_at: row.get(7)?,
             })
         })?
         .collect();
@@ -871,6 +966,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
             <td>{}</td>
             <td><code>{}</code></td>
             <td><a href="{}" target="_blank" rel="noreferrer">{}</a></td>
+            <td>{}</td>
+            <td>{}</td>
             <td><time datetime="{}" data-local-datetime>{}</time></td>
             <td><code>{}</code></td>
           </tr>"#,
@@ -879,6 +976,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
                 escape_html(&record.account_id),
                 escape_attr(&record.url),
                 escape_html(&record.title),
+                render_draw_time(&record.draw_at),
+                render_daily_engagement_count(record),
                 escape_attr(&record.engaged_at),
                 escape_html(&record.engaged_at),
                 escape_html(&record.post_id),
@@ -935,6 +1034,8 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
             <th>#</th>
             <th>Account</th>
             <th>Title</th>
+            <th>Draw Time</th>
+            <th>Daily Count</th>
             <th>Engaged Date</th>
             <th>Post ID</th>
           </tr>
@@ -1086,7 +1187,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
         width: 100%;
       }}
       .report-table table {{
-        min-width: 760px;
+        min-width: 980px;
       }}
       .report-table th, .report-table td {{
         white-space: nowrap;
@@ -1131,7 +1232,7 @@ fn render_report(db_path: &Path) -> rusqlite::Result<String> {
           margin-top: 8px;
           text-align: left;
         }}
-        .lottery-table th:nth-child(5), .lottery-table td:nth-child(5) {{ display: none; }}
+        .lottery-table th:nth-child(7), .lottery-table td:nth-child(7) {{ display: none; }}
       }}
     </style>
   </head>
@@ -1524,6 +1625,28 @@ fn normalize_account_id(value: &str) -> String {
         }
     }
     output.trim_matches('-').to_string()
+}
+
+fn render_draw_time(value: &str) -> String {
+    let draw_at = value.trim();
+    if draw_at.is_empty() {
+        return "-".to_string();
+    }
+
+    format!(
+        r#"<time datetime="{}">{}</time>"#,
+        escape_attr(draw_at),
+        escape_html(draw_at)
+    )
+}
+
+fn render_daily_engagement_count(record: &Record) -> String {
+    let date = record.last_engaged_date.trim();
+    if date.is_empty() || record.daily_engagement_count <= 0 {
+        return "-".to_string();
+    }
+
+    format!("{}: {}", escape_html(date), record.daily_engagement_count)
 }
 
 fn escape_html(value: &str) -> String {
