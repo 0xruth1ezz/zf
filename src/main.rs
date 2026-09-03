@@ -7,479 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const APP_CSS: &str = r#"
-      :root {
-        color-scheme: light;
-        --bg: oklch(0.967 0.006 178);
-        --surface: oklch(1 0 0);
-        --surface-muted: oklch(0.94 0.008 178);
-        --ink: oklch(0.24 0.018 190);
-        --ink-muted: oklch(0.44 0.018 190);
-        --line: oklch(0.86 0.011 185);
-        --line-strong: oklch(0.76 0.017 185);
-        --accent: oklch(0.47 0.09 178);
-        --accent-strong: oklch(0.39 0.087 178);
-        --accent-soft: oklch(0.91 0.038 178);
-        --danger: oklch(0.48 0.16 28);
-        --danger-soft: oklch(0.94 0.04 28);
-        --success: oklch(0.45 0.11 154);
-        --success-soft: oklch(0.92 0.04 154);
-        --focus: oklch(0.62 0.14 178);
-        --radius: 10px;
-        --radius-sm: 7px;
-      }
-      * { box-sizing: border-box; }
-      html { min-height: 100%; }
-      body {
-        min-height: 100%;
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 14px;
-        line-height: 1.45;
-      }
-      a {
-        color: var(--accent-strong);
-        text-decoration: none;
-      }
-      a:hover { text-decoration: underline; }
-      :focus-visible {
-        outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
-        outline-offset: 2px;
-      }
-      button,
-      .btn,
-      input,
-      select {
-        border-radius: var(--radius-sm);
-        font: inherit;
-      }
-      button,
-      .btn {
-        min-height: 34px;
-        border: 1px solid var(--line-strong);
-        background: var(--surface);
-        color: var(--ink);
-        cursor: pointer;
-        font-weight: 650;
-        letter-spacing: 0;
-        padding: 0 12px;
-        text-decoration: none;
-        text-transform: none;
-        transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
-      }
-      button:hover,
-      .btn:hover {
-        border-color: var(--accent);
-        background: var(--accent-soft);
-        color: var(--accent-strong);
-        text-decoration: none;
-      }
-      button:disabled {
-        cursor: not-allowed;
-        opacity: 0.52;
-      }
-      input,
-      select {
-        min-height: 36px;
-        border: 1px solid var(--line-strong);
-        background: var(--surface);
-        color: var(--ink);
-        padding: 0 10px;
-      }
-      input::placeholder { color: var(--ink-muted); opacity: 1; }
-      input[readonly] {
-        background: var(--surface-muted);
-        color: var(--ink-muted);
-      }
-      code {
-        color: var(--ink-muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 12px;
-      }
-      main {
-        width: min(1180px, calc(100vw - 32px));
-        margin: 0 auto 48px;
-      }
-      .app-bar {
-        position: sticky;
-        top: 0;
-        z-index: 20;
-        border-bottom: 1px solid var(--line);
-        background: color-mix(in oklch, var(--surface), var(--bg) 10%);
-      }
-      .app-bar__inner {
-        width: min(1180px, calc(100vw - 32px));
-        min-height: 64px;
-        margin: 0 auto;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-      }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        min-width: 0;
-      }
-      .brand__mark {
-        display: grid;
-        place-items: center;
-        width: 34px;
-        height: 34px;
-        border-radius: 8px;
-        background: var(--accent);
-        color: white;
-        font-size: 13px;
-        font-weight: 800;
-        letter-spacing: 0;
-      }
-      .brand__name {
-        margin: 0;
-        color: var(--ink);
-        font-size: 15px;
-        font-weight: 760;
-        line-height: 1.1;
-      }
-      .brand__sub {
-        margin: 3px 0 0;
-        color: var(--ink-muted);
-        font-size: 12px;
-        line-height: 1.2;
-      }
-      .app-nav {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .app-nav a {
-        display: inline-flex;
-        align-items: center;
-        min-height: 34px;
-        padding: 0 12px;
-        border-radius: 999px;
-        color: var(--ink-muted);
-        font-weight: 650;
-        text-decoration: none;
-      }
-      .app-nav a:hover {
-        background: var(--surface-muted);
-        color: var(--ink);
-      }
-      .app-nav a[aria-current="page"] {
-        background: var(--accent);
-        color: white;
-      }
-      .page-header {
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 24px;
-        padding: 30px 0 22px;
-      }
-      .page-title {
-        margin: 0;
-        font-size: 28px;
-        line-height: 1.16;
-        letter-spacing: -0.015em;
-        text-wrap: balance;
-      }
-      .page-copy {
-        max-width: 66ch;
-        margin: 8px 0 0;
-        color: var(--ink-muted);
-      }
-      .metric-strip {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-      .metric {
-        min-width: 112px;
-        padding: 9px 11px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-      }
-      .metric__label {
-        display: block;
-        color: var(--ink-muted);
-        font-size: 11px;
-        font-weight: 700;
-      }
-      .metric__value {
-        display: block;
-        margin-top: 2px;
-        color: var(--ink);
-        font-size: 16px;
-        font-weight: 760;
-      }
-      .toolbar {
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 14px;
-        margin-bottom: 22px;
-        padding: 12px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-      }
-      .field {
-        display: grid;
-        gap: 6px;
-        min-width: 220px;
-      }
-      .field span,
-      label > span {
-        color: var(--ink-muted);
-        font-size: 12px;
-        font-weight: 700;
-      }
-      section + section { margin-top: 30px; }
-      .section-heading {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 12px;
-      }
-      .section-heading h2 {
-        margin: 0;
-        font-size: 18px;
-        line-height: 1.25;
-        letter-spacing: -0.01em;
-      }
-      .section-note {
-        margin: 0;
-        color: var(--ink-muted);
-        font-size: 13px;
-      }
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-        overflow: hidden;
-      }
-      .empty {
-        padding: 18px;
-        color: var(--ink-muted);
-      }
-      .empty strong {
-        display: block;
-        margin-bottom: 4px;
-        color: var(--ink);
-      }
-      [hidden] { display: none !important; }
-      .table-container {
-        overflow-x: auto;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      .report-table table {
-        min-width: 980px;
-      }
-      th,
-      td {
-        border-bottom: 1px solid var(--line);
-        padding: 11px 13px;
-        text-align: left;
-        vertical-align: middle;
-        white-space: nowrap;
-      }
-      th {
-        background: var(--surface-muted);
-        color: var(--ink-muted);
-        font-size: 12px;
-        font-weight: 760;
-      }
-      tbody tr:hover {
-        background: color-mix(in oklch, var(--accent-soft), white 45%);
-      }
-      tbody tr:last-child td {
-        border-bottom: 0;
-      }
-      .lottery-table td:nth-child(3) {
-        min-width: 300px;
-        white-space: normal;
-      }
-      .pagination {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        color: var(--ink-muted);
-        font-size: 13px;
-      }
-      .pagination button {
-        min-width: 76px;
-      }
-      .notice {
-        margin: 0 0 18px;
-        padding: 12px 14px;
-        border: 1px solid color-mix(in oklch, var(--success), white 50%);
-        border-radius: var(--radius);
-        background: var(--success-soft);
-        color: oklch(0.32 0.09 154);
-      }
-      .account-row,
-      .new-account {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-        padding: 14px;
-      }
-      .account-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px 16px;
-        align-items: start;
-      }
-      .account-row + .account-row {
-        margin-top: 10px;
-      }
-      .account-form,
-      .new-account {
-        display: grid;
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto;
-        gap: 12px;
-        align-items: end;
-      }
-      .new-account {
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto auto;
-      }
-      label {
-        display: grid;
-        gap: 6px;
-      }
-      .check {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 36px;
-        color: var(--ink);
-      }
-      .check input {
-        width: 18px;
-        min-height: 18px;
-      }
-      .account-actions {
-        display: grid;
-        gap: 8px;
-        min-width: 84px;
-        padding-top: 26px;
-      }
-      .account-actions button,
-      .new-account button {
-        width: 100%;
-      }
-      .delete-form {
-        margin: 0;
-      }
-      .danger,
-      .btn-danger,
-      .action-danger {
-        border-color: color-mix(in oklch, var(--danger), white 35%);
-        color: var(--danger);
-      }
-      .danger:hover,
-      .btn-danger:hover,
-      .action-danger:hover {
-        border-color: var(--danger);
-        background: var(--danger-soft);
-        color: var(--danger);
-      }
-      .btn-success,
-      .action-primary {
-        border-color: var(--accent);
-        background: var(--accent);
-        color: white;
-      }
-      .btn-success:hover,
-      .action-primary:hover {
-        border-color: var(--accent-strong);
-        background: var(--accent-strong);
-        color: white;
-      }
-      .row-meta {
-        grid-column: 1 / -1;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 2px;
-        color: var(--ink-muted);
-        font-size: 12px;
-      }
-      @media (max-width: 860px) {
-        .app-bar__inner,
-        .page-header {
-          align-items: stretch;
-          flex-direction: column;
-        }
-        .app-nav,
-        .metric-strip {
-          justify-content: flex-start;
-        }
-        .toolbar {
-          align-items: stretch;
-          flex-direction: column;
-        }
-        .field {
-          min-width: 0;
-        }
-        .account-row {
-          grid-template-columns: 1fr;
-        }
-        .account-form,
-        .new-account {
-          grid-template-columns: 1fr;
-        }
-        .account-actions {
-          grid-template-columns: 1fr 1fr;
-          padding-top: 0;
-        }
-      }
-      @media (max-width: 720px) {
-        main,
-        .app-bar__inner {
-          width: min(100vw - 20px, 1180px);
-        }
-        .page-header {
-          padding-top: 22px;
-        }
-        .page-title {
-          font-size: 24px;
-        }
-        .section-heading {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-        .metric {
-          min-width: calc(50% - 4px);
-        }
-        .lottery-table th:nth-child(7),
-        .lottery-table td:nth-child(7) {
-          display: none;
-        }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        *,
-        *::before,
-        *::after {
-          scroll-behavior: auto !important;
-          transition-duration: 0.01ms !important;
-          animation-duration: 0.01ms !important;
-          animation-iteration-count: 1 !important;
-        }
-      }
-"#;
+const APP_CSS: &str = include_str!("../ui.generated.css");
 
 #[derive(Debug)]
 struct Record {
@@ -1128,19 +656,20 @@ fn render_app_bar(active_page: &str) -> String {
         .collect::<String>();
 
     format!(
-        r#"
-    <div class="app-bar">
+        r##"
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="app-bar">
       <div class="app-bar__inner">
-        <div class="brand">
+        <a class="brand" href="/" aria-label="zFrontier Crawler report">
           <div class="brand__mark" aria-hidden="true">ZF</div>
           <div class="brand__text">
             <p class="brand__name">zFrontier Crawler</p>
             <p class="brand__sub">Lottery and sign-in operations</p>
           </div>
-        </div>
+        </a>
         <nav class="app-nav" aria-label="Primary">{nav}</nav>
       </div>
-    </div>"#
+    </header>"##
     )
 }
 
@@ -1151,8 +680,8 @@ fn render_metric_strip(metrics: &[(&str, String)]) -> String {
             format!(
                 r#"
             <div class="metric">
-              <span class="metric__label">{}</span>
-              <span class="metric__value">{}</span>
+              <dt class="metric__label">{}</dt>
+              <dd class="metric__value">{}</dd>
             </div>"#,
                 escape_html(label),
                 escape_html(value)
@@ -1162,8 +691,8 @@ fn render_metric_strip(metrics: &[(&str, String)]) -> String {
 
     format!(
         r#"
-          <div class="metric-strip">{metric_items}
-          </div>"#
+          <dl class="metric-strip">{metric_items}
+          </dl>"#
     )
 }
 
@@ -1171,9 +700,9 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     let accounts = load_accounts(db_path)?;
     let query_values = parse_form_urlencoded(query);
     let notice = if query_values.contains_key("saved") {
-        r#"<div class="notice">Account saved.</div>"#
+        r#"<div class="notice" role="status">Account saved.</div>"#
     } else if query_values.contains_key("deleted") {
-        r#"<div class="notice">Account deleted.</div>"#
+        r#"<div class="notice" role="status">Account deleted.</div>"#
     } else {
         ""
     };
@@ -1182,15 +711,22 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .iter()
         .map(|account| {
             let checked = if account.enabled { " checked" } else { "" };
+            let status_class = if account.enabled {
+                "status-badge--success"
+            } else {
+                ""
+            };
+            let status_label = if account.enabled { "Enabled" } else { "Paused" };
             let form_id = format!("account-save-{}", account.id);
             format!(
                 r#"
-          <div class="account-row">
+          <article class="account-row">
+            <header class="account-row__header">
+              <h3><code>{}</code></h3>
+              <span class="status-badge {}">{}</span>
+            </header>
             <form id="{}" class="account-form" method="post" action="/config/accounts" autocomplete="off">
-              <label>
-                <span>Account ID</span>
-                <input name="id" value="{}" readonly>
-              </label>
+              <input type="hidden" name="id" value="{}">
               <label>
                 <span>Phone</span>
                 <input name="phone" value="{}" inputmode="numeric" autocomplete="off" required>
@@ -1205,22 +741,26 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
               </label>
             </form>
             <div class="account-actions">
-              <button class="action-primary" type="submit" form="{}">Save</button>
-              <form class="delete-form" method="post" action="/config/accounts/delete">
+              <button class="action-primary" type="submit" form="{}" data-pending-label="Saving...">Save</button>
+              <form class="delete-form" method="post" action="/config/accounts/delete" data-delete-account data-account-id="{}">
                 <input type="hidden" name="id" value="{}">
-                <button class="action-danger" type="submit">Delete</button>
+                <button class="action-danger" type="submit" data-pending-label="Deleting...">Delete</button>
               </form>
             </div>
             <div class="row-meta">
               <span>Created <time datetime="{}" data-local-datetime>{}</time></span>
               <span>Updated <time datetime="{}" data-local-datetime>{}</time></span>
             </div>
-          </div>"#,
+          </article>"#,
+                escape_html(&account.id),
+                status_class,
+                status_label,
                 escape_attr(&form_id),
                 escape_attr(&account.id),
                 escape_attr(&account.phone),
                 checked,
                 escape_attr(&form_id),
+                escape_attr(&account.id),
                 escape_attr(&account.id),
                 escape_attr(&account.created_at),
                 escape_html(&account.created_at),
@@ -1230,13 +770,17 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         })
         .collect::<String>();
 
+    let account_list = if account_rows.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<div class="account-list">{account_rows}</div>"#)
+    };
+
     let empty_accounts = if accounts.is_empty() {
         r#"<div class="empty panel"><strong>No database accounts yet</strong><span>The crawler will keep using env fallback credentials until an enabled account is saved here.</span></div>"#
     } else {
         ""
     };
-    let metrics = render_metric_strip(&[("Accounts", accounts.len().to_string())]);
-
     Ok(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -1250,19 +794,18 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
   </head>
   <body>
     {}
-    <main>
+    <main id="main-content">
       <header class="page-header">
         <div>
           <h1 class="page-title">Configuration</h1>
           <p class="page-copy">Manage the crawler accounts used for zFrontier sign-ins and lottery participation.</p>
         </div>
-        {}
       </header>
       {}
       <section>
         <div class="section-heading">
           <div>
-            <h2>Accounts</h2>
+            <h2>Accounts <span class="section-count">{}</span></h2>
             <p class="section-note">Enabled accounts are loaded before environment fallback credentials.</p>
           </div>
         </div>
@@ -1272,14 +815,14 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       <section>
         <div class="section-heading">
           <div>
-            <h2>Add account</h2>
+            <h2 id="add-account-title">Add account</h2>
             <p class="section-note">Store credentials in the local SQLite database for crawler runs.</p>
           </div>
         </div>
-        <form class="new-account" method="post" action="/config/accounts" autocomplete="off">
+        <form class="new-account" method="post" action="/config/accounts" autocomplete="off" aria-labelledby="add-account-title">
           <label>
             <span>Account ID</span>
-            <input name="id" placeholder="default" autocomplete="off" required>
+            <input name="id" placeholder="e.g. primary" autocomplete="off" required>
           </label>
           <label>
             <span>Phone</span>
@@ -1293,7 +836,7 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             <input name="enabled" type="checkbox" value="1" checked>
             <span>Enabled</span>
           </label>
-          <button class="action-primary" type="submit">Add</button>
+          <button class="action-primary" type="submit" data-pending-label="Adding...">Add</button>
         </form>
       </section>
     </main>
@@ -1309,6 +852,25 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
           node.textContent = formatLocalDateTime(date);
           node.title = value;
         }});
+
+        document.querySelectorAll('[data-delete-account]').forEach((form) => {{
+          form.addEventListener('submit', (event) => {{
+            const accountId = form.dataset.accountId || 'this account';
+            if (!window.confirm(`Delete account "${{accountId}}"? This cannot be undone.`)) {{
+              event.preventDefault();
+            }}
+          }});
+        }});
+
+        document.querySelectorAll('form[method="post"]').forEach((form) => {{
+          form.addEventListener('submit', (event) => {{
+            if (event.defaultPrevented) return;
+            const button = event.submitter;
+            if (!(button instanceof HTMLButtonElement)) return;
+            button.disabled = true;
+            button.textContent = button.dataset.pendingLabel || button.textContent;
+          }});
+        }});
       }})();
     </script>
   </body>
@@ -1316,10 +878,10 @@ fn render_config(db_path: &Path, query: &str) -> rusqlite::Result<String> {
 "#,
         APP_CSS,
         render_app_bar("config"),
-        metrics,
         notice,
+        accounts.len(),
         empty_accounts,
-        account_rows,
+        account_list,
     ))
 }
 
@@ -1329,22 +891,29 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .get("account")
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
+    let include_drawn = query_flag_enabled(&query_values, "include_drawn");
     let all_records = load_records(db_path)?;
     let all_sign_ins = load_sign_ins(db_path)?;
     let accounts = load_accounts(db_path)?;
     let account_ids = report_account_ids(&all_records, &all_sign_ins, &accounts);
-    let records = filter_records_by_account(&all_records, selected_account);
+    let account_records = filter_records_by_account(&all_records, selected_account);
+    let now_china_minute = sqlite_china_now_minute(db_path)?;
+    let records = filter_records_by_draw_status(account_records, include_drawn, &now_china_minute);
     let sign_ins = filter_sign_ins_by_account(&all_sign_ins, selected_account);
     let account_count = selected_account
         .map(|account| usize::from(account_ids.iter().any(|id| id == account)))
         .unwrap_or_else(|| unique_account_count(&all_records, &all_sign_ins, &accounts));
     let account_filter_options = render_account_filter_options(&account_ids, selected_account);
-    let generated_at = sqlite_now(db_path).unwrap_or_else(|_| "now".to_string());
+    let lottery_metric_label = if include_drawn {
+        "Threads"
+    } else {
+        "Active draws"
+    };
     let metrics = render_metric_strip(&[
         ("Accounts", account_count.to_string()),
-        ("Lotteries", records.len().to_string()),
+        (lottery_metric_label, records.len().to_string()),
         ("Sign-ins", sign_ins.len().to_string()),
-        ("Generated", generated_at.clone()),
+        ("Updated", now_china_minute.clone()),
     ]);
     let rows = records
         .iter()
@@ -1352,7 +921,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .map(|(index, record)| {
             format!(
                 r#"
-          <tr data-account-id="{}">
+          <tr data-account-id="{}" data-draw-at="{}">
             <td>{}</td>
             <td><code>{}</code></td>
             <td><a href="{}" target="_blank" rel="noreferrer">{}</a></td>
@@ -1362,6 +931,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             <td><code>{}</code></td>
           </tr>"#,
                 escape_attr(&record.account_id),
+                escape_attr(&record.draw_at),
                 index + 1,
                 escape_html(&record.account_id),
                 escape_attr(&record.url),
@@ -1395,14 +965,16 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
                 escape_html(&record.sign_in_date),
                 escape_attr(&record.signed_at),
                 escape_html(&record.signed_at),
-                escape_html(&record.status),
+                render_status(&record.status),
                 escape_html(&record.message),
             )
         })
         .collect::<String>();
 
-    let empty = if records.is_empty() {
-        r#"<div class="empty panel"><strong>No engaged lotteries yet</strong><span>The crawler has not recorded any lottery engagement rows for the selected account.</span></div>"#
+    let empty = if records.is_empty() && include_drawn {
+        r#"<div class="empty panel"><strong>No lottery threads found</strong><span>The crawler has not recorded any lottery threads for the selected account.</span></div>"#
+    } else if records.is_empty() {
+        r#"<div class="empty panel"><strong>No active lottery threads</strong><span>Turn on Include drawn to show threads whose draw time has passed.</span></div>"#
     } else {
         ""
     };
@@ -1417,17 +989,17 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<div class="panel table-container report-table" data-table-container>
+            r#"<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Lottery threads table">
         <table class="lottery-table" data-paginated-table data-page-size="20">
         <thead>
           <tr>
-            <th>#</th>
-            <th>Account</th>
-            <th>Title</th>
-            <th>Draw Time</th>
-            <th>Daily Count</th>
-            <th>Engaged Date</th>
-            <th>Post ID</th>
+            <th scope="col">#</th>
+            <th scope="col">Account</th>
+            <th scope="col">Title</th>
+            <th scope="col">Draw time</th>
+            <th scope="col">Daily count</th>
+            <th scope="col">Last engaged</th>
+            <th scope="col">Post ID</th>
           </tr>
         </thead>
         <tbody>{rows}
@@ -1435,7 +1007,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       </table>
       </div>
       <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Prev</button>
+        <button type="button" data-page-prev>Previous</button>
         <span data-page-status></span>
         <button type="button" data-page-next>Next</button>
       </div>"#
@@ -1446,16 +1018,16 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         String::new()
     } else {
         format!(
-            r#"<div class="panel table-container report-table" data-table-container>
+            r#"<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Daily sign-ins table">
         <table data-paginated-table data-page-size="20">
         <thead>
           <tr>
-            <th>#</th>
-            <th>Account</th>
-            <th>Date</th>
-            <th>Signed At</th>
-            <th>Status</th>
-            <th>Message</th>
+            <th scope="col">#</th>
+            <th scope="col">Account</th>
+            <th scope="col">Date</th>
+            <th scope="col">Signed at</th>
+            <th scope="col">Status</th>
+            <th scope="col">Message</th>
           </tr>
         </thead>
         <tbody>{sign_in_rows}
@@ -1463,7 +1035,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       </table>
       </div>
       <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Prev</button>
+        <button type="button" data-page-prev>Previous</button>
         <span data-page-status></span>
         <button type="button" data-page-next>Next</button>
       </div>"#
@@ -1483,7 +1055,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
   </head>
   <body>
     {}
-    <main>
+    <main id="main-content">
       <header class="page-header">
         <div>
           <h1 class="page-title">Activity report</h1>
@@ -1499,12 +1071,16 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             {}
           </select>
         </label>
+        <label class="switch">
+          <input name="include_drawn" type="checkbox" value="1" data-include-drawn{}>
+          <span>Include drawn</span>
+        </label>
       </form>
       <section>
         <div class="section-heading">
           <div>
-            <h2>Engaged lotteries</h2>
-            <p class="section-note">Posts the crawler has entered, including draw time and per-day engagement count.</p>
+            <h2>Lottery threads <span class="section-count">{}</span></h2>
+            <p class="section-note">Active draws by default, with draw time and per-day engagement count.</p>
           </div>
         </div>
         {}
@@ -1513,7 +1089,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
       <section>
         <div class="section-heading">
           <div>
-            <h2>Daily sign-ins</h2>
+            <h2>Daily sign-ins <span class="section-count">{}</span></h2>
             <p class="section-note">One row per account and sign-in date, with status from the crawler run.</p>
           </div>
         </div>
@@ -1526,6 +1102,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         const pad = (value) => String(value).padStart(2, '0');
         const formatLocalDateTime = (date) => `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}} ${{pad(date.getHours())}}:${{pad(date.getMinutes())}}:${{pad(date.getSeconds())}}`;
         const accountFilter = document.querySelector('[data-account-filter]');
+        const includeDrawn = document.querySelector('[data-include-drawn]');
         const reportFilter = document.querySelector('[data-report-filter]');
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {{
@@ -1570,6 +1147,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             status.textContent = visibleRows.length === 0
               ? '0 of 0'
               : `${{start + 1}}-${{end}} of ${{visibleRows.length}}`;
+            controls.hidden = visibleRows.length <= pageSize;
           }};
 
           previous.addEventListener('click', () => {{
@@ -1581,17 +1159,18 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             page += 1;
             renderPage();
           }});
-          controls.hidden = false;
           renderPage();
         }});
 
-        accountFilter?.addEventListener('change', () => {{
+        const submitFilters = () => {{
           if (reportFilter?.requestSubmit) {{
             reportFilter.requestSubmit();
           }} else {{
             reportFilter?.submit();
           }}
-        }});
+        }};
+        accountFilter?.addEventListener('change', submitFilters);
+        includeDrawn?.addEventListener('change', submitFilters);
       }})();
     </script>
   </body>
@@ -1606,8 +1185,11 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             ""
         },
         account_filter_options,
+        if include_drawn { " checked" } else { "" },
+        records.len(),
         empty,
         table,
+        sign_ins.len(),
         sign_in_empty,
         sign_in_table
     ))
@@ -1645,6 +1227,66 @@ fn filter_records_by_account<'a>(
         .collect()
 }
 
+fn filter_records_by_draw_status<'a>(
+    records: Vec<&'a Record>,
+    include_drawn: bool,
+    now_china_minute: &str,
+) -> Vec<&'a Record> {
+    if include_drawn {
+        return records;
+    }
+
+    records
+        .into_iter()
+        .filter(|record| !has_drawn(&record.draw_at, now_china_minute))
+        .collect()
+}
+
+fn has_drawn(draw_at: &str, now_china_minute: &str) -> bool {
+    if now_china_minute.is_empty() {
+        return false;
+    }
+
+    draw_minute_key(draw_at)
+        .map(|draw_minute| draw_minute.as_str() <= now_china_minute)
+        .unwrap_or(false)
+}
+
+fn draw_minute_key(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .replace('/', "-")
+        .replace('.', "-")
+        .replace('T', " ");
+    let mut parts = normalized.split_whitespace();
+    let date = parts.next()?;
+    let time = parts.next()?;
+
+    let mut date_parts = date.split('-');
+    let year = date_parts.next()?.parse::<u32>().ok()?;
+    let month = date_parts.next()?.parse::<u32>().ok()?;
+    let day = date_parts.next()?.parse::<u32>().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+
+    let mut time_parts = time.split(':');
+    let hour = time_parts.next()?.parse::<u32>().ok()?;
+    let minute = time_parts.next()?.parse::<u32>().ok()?;
+    if !(2000..=2999).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+    {
+        return None;
+    }
+
+    Some(format!(
+        "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
+    ))
+}
+
 fn filter_sign_ins_by_account<'a>(
     sign_ins: &'a [SignInRecord],
     selected_account: Option<&str>,
@@ -1679,10 +1321,22 @@ fn render_account_filter_options(account_ids: &[String], selected_account: Optio
         .join("\n            ")
 }
 
-fn sqlite_now(db_path: &Path) -> rusqlite::Result<String> {
+fn query_flag_enabled(values: &HashMap<String, String>, key: &str) -> bool {
+    values
+        .get(key)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn sqlite_china_now_minute(db_path: &Path) -> rusqlite::Result<String> {
     let conn = Connection::open(db_path)?;
     conn.query_row(
-        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        "SELECT strftime('%Y-%m-%d %H:%M', 'now', '+8 hours')",
         params![],
         |row| row.get(0),
     )
@@ -1917,7 +1571,7 @@ fn normalize_account_id(value: &str) -> String {
 fn render_draw_time(value: &str) -> String {
     let draw_at = value.trim();
     if draw_at.is_empty() {
-        return "-".to_string();
+        return r#"<span class="status-badge">Unknown</span>"#.to_string();
     }
 
     format!(
@@ -1930,10 +1584,52 @@ fn render_draw_time(value: &str) -> String {
 fn render_daily_engagement_count(record: &Record) -> String {
     let date = record.last_engaged_date.trim();
     if date.is_empty() || record.daily_engagement_count <= 0 {
-        return "-".to_string();
+        return r#"<span class="empty-value">Not recorded</span>"#.to_string();
     }
 
-    format!("{}: {}", escape_html(date), record.daily_engagement_count)
+    format!(
+        r#"<span class="count-stack"><strong>{}</strong><small>{}</small></span>"#,
+        record.daily_engagement_count,
+        escape_html(date)
+    )
+}
+
+fn render_status(value: &str) -> String {
+    let normalized = value.trim().to_ascii_lowercase();
+    let tone = match normalized.as_str() {
+        "signed" | "already_signed" | "success" => " status-badge--success",
+        "clicked" => " status-badge--info",
+        "failed" | "error" => " status-badge--danger",
+        _ => "",
+    };
+    let label = humanize_identifier(&normalized);
+
+    format!(
+        r#"<span class="status-badge{}">{}</span>"#,
+        tone,
+        escape_html(&label)
+    )
+}
+
+fn humanize_identifier(value: &str) -> String {
+    let label = value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if label.is_empty() {
+        "Unknown".to_string()
+    } else {
+        label
+    }
 }
 
 fn escape_html(value: &str) -> String {
@@ -1947,4 +1643,53 @@ fn escape_html(value: &str) -> String {
 
 fn escape_attr(value: &str) -> String {
     escape_html(value).replace('`', "&#96;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(post_id: &str, draw_at: &str) -> Record {
+        Record {
+            account_id: "account".to_string(),
+            post_id: post_id.to_string(),
+            title: post_id.to_string(),
+            url: format!("https://example.test/{post_id}"),
+            draw_at: draw_at.to_string(),
+            last_engaged_date: String::new(),
+            daily_engagement_count: 0,
+            engaged_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn hides_drawn_records_by_default_and_keeps_unknown_draw_times() {
+        let records = [
+            record("drawn", "2026-09-04 12:00"),
+            record("active", "2026-09-04 12:01"),
+            record("unknown", ""),
+        ];
+
+        let filtered =
+            filter_records_by_draw_status(records.iter().collect(), false, "2026-09-04 12:00");
+        let post_ids = filtered
+            .iter()
+            .map(|record| record.post_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(post_ids, vec!["active", "unknown"]);
+    }
+
+    #[test]
+    fn include_drawn_returns_every_record() {
+        let records = [
+            record("drawn", "2026-09-04 12:00"),
+            record("active", "2026-09-04 12:01"),
+        ];
+
+        let filtered =
+            filter_records_by_draw_status(records.iter().collect(), true, "2026-09-04 12:00");
+
+        assert_eq!(filtered.len(), 2);
+    }
 }

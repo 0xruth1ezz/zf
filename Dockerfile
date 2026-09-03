@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
+FROM node:24-bookworm-slim AS ui-builder
+
+WORKDIR /src
+
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+
+COPY uno.config.mjs ui.css ./
+RUN npm run build:css
+
 FROM rust:1.94-bookworm AS rust-builder
 
 WORKDIR /src
@@ -11,6 +21,7 @@ RUN apt-get update \
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
 COPY Cargo.toml Cargo.lock ./
+COPY --from=ui-builder /src/ui.generated.css ./ui.generated.css
 COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -41,6 +52,7 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 COPY engaged-store.js view-engaged-lotteries.js zfrontier-lottery-crawler.js ./
+COPY --from=ui-builder /src/ui.generated.css ./ui.generated.css
 COPY --from=rust-builder /tmp/zfrontier-report-server /usr/local/bin/zfrontier-report-server
 COPY docker/entrypoint.sh /usr/local/bin/zfrontier-entrypoint
 

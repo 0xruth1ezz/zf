@@ -7,8 +7,10 @@
     "start": "node zfrontier-lottery-crawler.js",
     "dry-run": "node zfrontier-lottery-crawler.js --dry-run",
     "view": "node view-engaged-lotteries.js",
-    "serve:report": "cargo run --bin zfrontier-report-server",
-    "check": "npm run check:node && cargo check",
+    "build:css": "CI=1 unocss ui.css -c uno.config.mjs -o ui.generated.css",
+    "watch:css": "npm run build:css -- --watch",
+    "serve:report": "npm run build:css && cargo run --bin zfrontier-report-server",
+    "check": "npm run build:css && npm run check:node && cargo check",
     "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check view-engaged-lotteries.js"
   },
   "keywords": [],
@@ -19,5 +21,10 @@
     "crawlee": "^3.16.0",
     "dotenv": "^17.4.2",
     "playwright": "^1.60.0"
+  },
+  "devDependencies": {
+    "@unocss/cli": "^66.9.2",
+    "@unocss/transformer-directives": "^66.9.2",
+    "unocss": "^66.9.2"
   }
 }

@@ -3,486 +3,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
 const DEFAULT_ACCOUNT_ID = 'default';
-const APP_CSS = `
-      :root {
-        color-scheme: light;
-        --bg: oklch(0.967 0.006 178);
-        --surface: oklch(1 0 0);
-        --surface-muted: oklch(0.94 0.008 178);
-        --ink: oklch(0.24 0.018 190);
-        --ink-muted: oklch(0.44 0.018 190);
-        --line: oklch(0.86 0.011 185);
-        --line-strong: oklch(0.76 0.017 185);
-        --accent: oklch(0.47 0.09 178);
-        --accent-strong: oklch(0.39 0.087 178);
-        --accent-soft: oklch(0.91 0.038 178);
-        --danger: oklch(0.48 0.16 28);
-        --danger-soft: oklch(0.94 0.04 28);
-        --success: oklch(0.45 0.11 154);
-        --success-soft: oklch(0.92 0.04 154);
-        --focus: oklch(0.62 0.14 178);
-        --radius: 10px;
-        --radius-sm: 7px;
-      }
-
-      * { box-sizing: border-box; }
-      html { min-height: 100%; }
-      body {
-        min-height: 100%;
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 14px;
-        line-height: 1.45;
-      }
-      a {
-        color: var(--accent-strong);
-        text-decoration: none;
-      }
-      a:hover { text-decoration: underline; }
-      :focus-visible {
-        outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
-        outline-offset: 2px;
-      }
-      button,
-      .btn,
-      input,
-      select {
-        border-radius: var(--radius-sm);
-        font: inherit;
-      }
-      button,
-      .btn {
-        min-height: 34px;
-        border: 1px solid var(--line-strong);
-        background: var(--surface);
-        color: var(--ink);
-        cursor: pointer;
-        font-weight: 650;
-        letter-spacing: 0;
-        padding: 0 12px;
-        text-decoration: none;
-        text-transform: none;
-        transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
-      }
-      button:hover,
-      .btn:hover {
-        border-color: var(--accent);
-        background: var(--accent-soft);
-        color: var(--accent-strong);
-        text-decoration: none;
-      }
-      button:disabled,
-      .btn[aria-disabled="true"] {
-        cursor: not-allowed;
-        opacity: 0.52;
-      }
-      input,
-      select {
-        min-height: 36px;
-        border: 1px solid var(--line-strong);
-        background: var(--surface);
-        color: var(--ink);
-        padding: 0 10px;
-      }
-      input::placeholder { color: var(--ink-muted); opacity: 1; }
-      input[readonly] {
-        background: var(--surface-muted);
-        color: var(--ink-muted);
-      }
-      code {
-        color: var(--ink-muted);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 12px;
-      }
-      main {
-        width: min(1180px, calc(100vw - 32px));
-        margin: 0 auto 48px;
-      }
-      .app-bar {
-        position: sticky;
-        top: 0;
-        z-index: 20;
-        border-bottom: 1px solid var(--line);
-        background: color-mix(in oklch, var(--surface), var(--bg) 10%);
-      }
-      .app-bar__inner {
-        width: min(1180px, calc(100vw - 32px));
-        min-height: 64px;
-        margin: 0 auto;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-      }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        min-width: 0;
-      }
-      .brand__mark {
-        display: grid;
-        place-items: center;
-        width: 34px;
-        height: 34px;
-        border-radius: 8px;
-        background: var(--accent);
-        color: white;
-        font-size: 13px;
-        font-weight: 800;
-        letter-spacing: 0;
-      }
-      .brand__text {
-        min-width: 0;
-      }
-      .brand__name {
-        margin: 0;
-        color: var(--ink);
-        font-size: 15px;
-        font-weight: 760;
-        line-height: 1.1;
-      }
-      .brand__sub {
-        margin: 3px 0 0;
-        color: var(--ink-muted);
-        font-size: 12px;
-        line-height: 1.2;
-      }
-      .app-nav {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .app-nav a {
-        display: inline-flex;
-        align-items: center;
-        min-height: 34px;
-        padding: 0 12px;
-        border-radius: 999px;
-        color: var(--ink-muted);
-        font-weight: 650;
-        text-decoration: none;
-      }
-      .app-nav a:hover {
-        background: var(--surface-muted);
-        color: var(--ink);
-      }
-      .app-nav a[aria-current="page"] {
-        background: var(--accent);
-        color: white;
-      }
-      .page-header {
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 24px;
-        padding: 30px 0 22px;
-      }
-      .page-title {
-        margin: 0;
-        font-size: 28px;
-        line-height: 1.16;
-        letter-spacing: -0.015em;
-        text-wrap: balance;
-      }
-      .page-copy {
-        max-width: 66ch;
-        margin: 8px 0 0;
-        color: var(--ink-muted);
-      }
-      .metric-strip {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-      .metric {
-        min-width: 112px;
-        padding: 9px 11px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-      }
-      .metric__label {
-        display: block;
-        color: var(--ink-muted);
-        font-size: 11px;
-        font-weight: 700;
-      }
-      .metric__value {
-        display: block;
-        margin-top: 2px;
-        color: var(--ink);
-        font-size: 16px;
-        font-weight: 760;
-      }
-      .toolbar {
-        display: flex;
-        align-items: end;
-        justify-content: space-between;
-        gap: 14px;
-        margin-bottom: 22px;
-        padding: 12px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-      }
-      .field {
-        display: grid;
-        gap: 6px;
-        min-width: 220px;
-      }
-      .field span,
-      label > span {
-        color: var(--ink-muted);
-        font-size: 12px;
-        font-weight: 700;
-      }
-      section + section { margin-top: 30px; }
-      .section-heading {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 12px;
-      }
-      .section-heading h2 {
-        margin: 0;
-        font-size: 18px;
-        line-height: 1.25;
-        letter-spacing: -0.01em;
-      }
-      .section-note {
-        margin: 0;
-        color: var(--ink-muted);
-        font-size: 13px;
-      }
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-        overflow: hidden;
-      }
-      .empty {
-        padding: 18px;
-        color: var(--ink-muted);
-      }
-      .empty strong {
-        display: block;
-        margin-bottom: 4px;
-        color: var(--ink);
-      }
-      [hidden] { display: none !important; }
-      .table-container {
-        overflow-x: auto;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      .report-table table {
-        min-width: 980px;
-      }
-      th,
-      td {
-        border-bottom: 1px solid var(--line);
-        padding: 11px 13px;
-        text-align: left;
-        vertical-align: middle;
-        white-space: nowrap;
-      }
-      th {
-        background: var(--surface-muted);
-        color: var(--ink-muted);
-        font-size: 12px;
-        font-weight: 760;
-      }
-      tbody tr:hover {
-        background: color-mix(in oklch, var(--accent-soft), white 45%);
-      }
-      tbody tr:last-child td {
-        border-bottom: 0;
-      }
-      .lottery-table td:nth-child(3) {
-        min-width: 300px;
-        white-space: normal;
-      }
-      .pagination {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        color: var(--ink-muted);
-        font-size: 13px;
-      }
-      .pagination button {
-        min-width: 76px;
-      }
-      .notice {
-        margin: 0 0 18px;
-        padding: 12px 14px;
-        border: 1px solid color-mix(in oklch, var(--success), white 50%);
-        border-radius: var(--radius);
-        background: var(--success-soft);
-        color: oklch(0.32 0.09 154);
-      }
-      .form-panel {
-        padding: 14px;
-      }
-      .account-row,
-      .new-account {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--surface);
-        padding: 14px;
-      }
-      .account-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px 16px;
-        align-items: start;
-      }
-      .account-row + .account-row {
-        margin-top: 10px;
-      }
-      .account-form,
-      .new-account {
-        display: grid;
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto;
-        gap: 12px;
-        align-items: end;
-      }
-      .new-account {
-        grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto auto;
-      }
-      label {
-        display: grid;
-        gap: 6px;
-      }
-      .check {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 36px;
-        color: var(--ink);
-      }
-      .check input {
-        width: 18px;
-        min-height: 18px;
-      }
-      .account-actions {
-        display: grid;
-        gap: 8px;
-        min-width: 84px;
-        padding-top: 26px;
-      }
-      .account-actions button,
-      .new-account button {
-        width: 100%;
-      }
-      .delete-form {
-        margin: 0;
-      }
-      .danger,
-      .btn-danger,
-      .action-danger {
-        border-color: color-mix(in oklch, var(--danger), white 35%);
-        color: var(--danger);
-      }
-      .danger:hover,
-      .btn-danger:hover,
-      .action-danger:hover {
-        border-color: var(--danger);
-        background: var(--danger-soft);
-        color: var(--danger);
-      }
-      .btn-success,
-      .action-primary {
-        border-color: var(--accent);
-        background: var(--accent);
-        color: white;
-      }
-      .btn-success:hover,
-      .action-primary:hover {
-        border-color: var(--accent-strong);
-        background: var(--accent-strong);
-        color: white;
-      }
-      .row-meta {
-        grid-column: 1 / -1;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 2px;
-        color: var(--ink-muted);
-        font-size: 12px;
-      }
-      @media (max-width: 860px) {
-        .app-bar__inner,
-        .page-header {
-          align-items: stretch;
-          flex-direction: column;
-        }
-        .app-nav,
-        .metric-strip {
-          justify-content: flex-start;
-        }
-        .toolbar {
-          align-items: stretch;
-          flex-direction: column;
-        }
-        .field {
-          min-width: 0;
-        }
-        .account-row {
-          grid-template-columns: 1fr;
-        }
-        .account-form,
-        .new-account {
-          grid-template-columns: 1fr;
-        }
-        .account-actions {
-          grid-template-columns: 1fr 1fr;
-          padding-top: 0;
-        }
-      }
-      @media (max-width: 720px) {
-        main,
-        .app-bar__inner {
-          width: min(100vw - 20px, 1180px);
-        }
-        .page-header {
-          padding-top: 22px;
-        }
-        .page-title {
-          font-size: 24px;
-        }
-        .section-heading {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-        .metric {
-          min-width: calc(50% - 4px);
-        }
-        .lottery-table th:nth-child(7),
-        .lottery-table td:nth-child(7) {
-          display: none;
-        }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        *,
-        *::before,
-        *::after {
-          scroll-behavior: auto !important;
-          transition-duration: 0.01ms !important;
-          animation-duration: 0.01ms !important;
-          animation-iteration-count: 1 !important;
-        }
-      }`;
+const APP_CSS = fs.readFileSync(path.join(__dirname, 'ui.generated.css'), 'utf8');
 
 function openEngagedStore(dbPath, htmlPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -789,29 +310,35 @@ function renderAppBar(activePage) {
   }).join('');
 
   return `
-    <div class="app-bar">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="app-bar">
       <div class="app-bar__inner">
-        <div class="brand">
+        <a class="brand" href="/" aria-label="zFrontier Crawler report">
           <div class="brand__mark" aria-hidden="true">ZF</div>
           <div class="brand__text">
             <p class="brand__name">zFrontier Crawler</p>
             <p class="brand__sub">Lottery and sign-in operations</p>
           </div>
-        </div>
+        </a>
         <nav class="app-nav" aria-label="Primary">${nav}</nav>
       </div>
-    </div>`;
+    </header>`;
 }
 
 function renderMetricStrip(metrics) {
   return `
-          <div class="metric-strip">
-            ${metrics.map((metric) => `
-            <div class="metric">
-              <span class="metric__label">${escapeHtml(metric.label)}</span>
-              <span class="metric__value">${escapeHtml(metric.value)}</span>
-            </div>`).join('')}
-          </div>`;
+          <dl class="metric-strip">
+            ${metrics.map((metric) => {
+    const attributes = metric.key
+      ? ` data-metric="${escapeAttr(metric.key)}" data-total="${escapeAttr(metric.value)}"`
+      : '';
+    return `
+            <div class="metric"${attributes}>
+              <dt class="metric__label" data-metric-label>${escapeHtml(metric.label)}</dt>
+              <dd class="metric__value">${escapeHtml(metric.value)}</dd>
+            </div>`;
+  }).join('')}
+          </dl>`;
 }
 
 function buildHtml(lotteryRows, signInRows, accountRows = []) {
@@ -819,13 +346,13 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
   const accountCount = countUniqueAccounts(lotteryRows, signInRows, accountRows);
   const accountFilterOptions = renderAccountFilterOptions(accountRows, lotteryRows, signInRows);
   const metrics = renderMetricStrip([
-    { label: 'Accounts', value: String(accountCount) },
-    { label: 'Lotteries', value: String(lotteryRows.length) },
-    { label: 'Sign-ins', value: String(signInRows.length) },
-    { label: 'Generated', value: formatDate(generatedAt) },
+    { key: 'accounts', label: 'Accounts', value: String(accountCount) },
+    { key: 'lotteries', label: 'Active draws', value: String(lotteryRows.length) },
+    { key: 'sign-ins', label: 'Sign-ins', value: String(signInRows.length) },
+    { label: 'Updated', value: formatDateMinute(generatedAt) },
   ]);
   const lotteryTableRows = lotteryRows.map((row, index) => `
-          <tr data-account-id="${escapeAttr(row.accountId)}">
+          <tr data-account-id="${escapeAttr(row.accountId)}" data-draw-at="${escapeAttr(row.drawAt)}">
             <td>${index + 1}</td>
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><a href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.title)}</a></td>
@@ -840,16 +367,16 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><code>${escapeHtml(row.signInDate)}</code></td>
             <td><time datetime="${escapeAttr(row.signedAt)}" data-local-datetime>${escapeHtml(formatDate(row.signedAt))}</time></td>
-            <td>${escapeHtml(row.status)}</td>
+            <td>${renderStatus(row.status)}</td>
             <td>${escapeHtml(row.message)}</td>
           </tr>`).join('');
 
   const emptyLotteryState = lotteryRows.length === 0
-    ? '<div class="empty panel"><strong>No engaged lotteries yet</strong><span>The crawler has not recorded any lottery engagement rows for the selected account.</span></div>'
-    : '';
+    ? '<div class="empty panel"><strong>No lottery threads found</strong><span>The crawler has not recorded any lottery threads yet.</span></div>'
+    : '<div class="empty panel" data-lottery-filter-empty hidden><strong>No active lottery threads</strong><span>Turn on Include drawn to show threads whose draw time has passed.</span></div>';
   const emptySignInState = signInRows.length === 0
     ? '<div class="empty panel"><strong>No daily sign-ins yet</strong><span>Daily sign-in attempts will appear here after the crawler records them.</span></div>'
-    : '';
+    : '<div class="empty panel" data-sign-in-filter-empty hidden><strong>No sign-ins for this account</strong><span>Choose another account to review its sign-in history.</span></div>';
 
   return `<!doctype html>
 <html lang="en">
@@ -863,7 +390,7 @@ ${APP_CSS}
   </head>
   <body>
     ${renderAppBar('report')}
-    <main>
+    <main id="main-content">
       <header class="page-header">
         <div>
           <h1 class="page-title">Activity report</h1>
@@ -879,26 +406,30 @@ ${APP_CSS}
             ${accountFilterOptions}
           </select>
         </label>
+        <label class="switch">
+          <input type="checkbox" data-include-drawn>
+          <span>Include drawn</span>
+        </label>
       </section>
       <section>
         <div class="section-heading">
           <div>
-            <h2>Engaged lotteries</h2>
-            <p class="section-note">Posts the crawler has entered, including draw time and per-day engagement count.</p>
+            <h2>Lottery threads <span class="section-count" data-lottery-section-count>${lotteryRows.length}</span></h2>
+            <p class="section-note">Active draws by default, with draw time and per-day engagement count.</p>
           </div>
         </div>
         ${emptyLotteryState}
-        ${lotteryRows.length > 0 ? `<div class="panel table-container report-table" data-table-container>
+        ${lotteryRows.length > 0 ? `<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Lottery threads table">
         <table class="lottery-table" data-paginated-table data-page-size="20">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Account</th>
-              <th>Title</th>
-              <th>Draw Time</th>
-              <th>Daily Count</th>
-              <th>Engaged Date</th>
-              <th>Post ID</th>
+              <th scope="col">#</th>
+              <th scope="col">Account</th>
+              <th scope="col">Title</th>
+              <th scope="col">Draw time</th>
+              <th scope="col">Daily count</th>
+              <th scope="col">Last engaged</th>
+              <th scope="col">Post ID</th>
             </tr>
           </thead>
           <tbody>${lotteryTableRows}
@@ -906,7 +437,7 @@ ${APP_CSS}
         </table>
         </div>
         <div class="pagination" data-pagination hidden>
-          <button type="button" data-page-prev>Prev</button>
+          <button type="button" data-page-prev>Previous</button>
           <span data-page-status></span>
           <button type="button" data-page-next>Next</button>
         </div>` : ''}
@@ -914,21 +445,21 @@ ${APP_CSS}
       <section>
         <div class="section-heading">
           <div>
-            <h2>Daily sign-ins</h2>
+            <h2>Daily sign-ins <span class="section-count" data-sign-in-section-count>${signInRows.length}</span></h2>
             <p class="section-note">One row per account and sign-in date, with status from the crawler run.</p>
           </div>
         </div>
         ${emptySignInState}
-        ${signInRows.length > 0 ? `<div class="panel table-container report-table" data-table-container>
+        ${signInRows.length > 0 ? `<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Daily sign-ins table">
         <table data-paginated-table data-page-size="20">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Account</th>
-              <th>Date</th>
-              <th>Signed At</th>
-              <th>Status</th>
-              <th>Message</th>
+              <th scope="col">#</th>
+              <th scope="col">Account</th>
+              <th scope="col">Date</th>
+              <th scope="col">Signed at</th>
+              <th scope="col">Status</th>
+              <th scope="col">Message</th>
             </tr>
           </thead>
           <tbody>${signInTableRows}
@@ -936,7 +467,7 @@ ${APP_CSS}
         </table>
         </div>
         <div class="pagination" data-pagination hidden>
-          <button type="button" data-page-prev>Prev</button>
+          <button type="button" data-page-prev>Previous</button>
           <span data-page-status></span>
           <button type="button" data-page-next>Next</button>
         </div>` : ''}
@@ -946,6 +477,9 @@ ${APP_CSS}
       (() => {
         const pad = (value) => String(value).padStart(2, '0');
         const accountFilter = document.querySelector('[data-account-filter]');
+        const includeDrawn = document.querySelector('[data-include-drawn]');
+        const lotteryFilterEmpty = document.querySelector('[data-lottery-filter-empty]');
+        const signInFilterEmpty = document.querySelector('[data-sign-in-filter-empty]');
         const formatLocalDateTime = (date) => (
           date.getFullYear() + '-' +
           pad(date.getMonth() + 1) + '-' +
@@ -954,6 +488,28 @@ ${APP_CSS}
           pad(date.getMinutes()) + ':' +
           pad(date.getSeconds())
         );
+        const chinaMinuteKey = () => {
+          const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23',
+          }).formatToParts(new Date());
+          const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+          return values.year + '-' + values.month + '-' + values.day + ' ' + values.hour + ':' + values.minute;
+        };
+        const drawMinuteKey = (value) => {
+          const match = String(value || '')
+            .trim()
+            .replace(/[/.]/g, '-')
+            .replace('T', ' ')
+            .match(/^(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2}) +([0-9]{1,2}):([0-9]{2})/);
+          if (!match) return '';
+          return match[1] + '-' + pad(match[2]) + '-' + pad(match[3]) + ' ' + pad(match[4]) + ':' + match[5];
+        };
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {
           const value = node.getAttribute('datetime');
@@ -975,19 +531,31 @@ ${APP_CSS}
           if (!controls || rows.length === 0 || pageSize <= 0) return;
 
           let page = 0;
+          const isLotteryTable = table.classList.contains('lottery-table');
           const previous = controls.querySelector('[data-page-prev]');
           const next = controls.querySelector('[data-page-next]');
           const status = controls.querySelector('[data-page-status]');
 
           const renderPage = () => {
             const selectedAccount = accountFilter?.value || '';
-            const visibleRows = rows.filter((row) => !selectedAccount || row.dataset.accountId === selectedAccount);
+            const includeCompleted = includeDrawn?.checked || false;
+            const nowMinute = chinaMinuteKey();
+            const visibleRows = rows.filter((row) => {
+              if (selectedAccount && row.dataset.accountId !== selectedAccount) return false;
+              if (!isLotteryTable || includeCompleted) return true;
+              const drawMinute = drawMinuteKey(row.dataset.drawAt);
+              return !drawMinute || drawMinute > nowMinute;
+            });
             const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
             if (page >= pageCount) page = pageCount - 1;
             const start = page * pageSize;
             const end = Math.min(start + pageSize, visibleRows.length);
             rows.forEach((row) => {
               row.hidden = true;
+            });
+            visibleRows.forEach((row, index) => {
+              const numberCell = row.querySelector('td');
+              if (numberCell) numberCell.textContent = String(index + 1);
             });
             visibleRows.slice(start, end).forEach((row) => {
               row.hidden = false;
@@ -997,6 +565,27 @@ ${APP_CSS}
             status.textContent = visibleRows.length === 0
               ? '0 of 0'
               : (start + 1) + '-' + end + ' of ' + visibleRows.length;
+            if (isLotteryTable && lotteryFilterEmpty) {
+              lotteryFilterEmpty.hidden = visibleRows.length !== 0;
+              container.hidden = visibleRows.length === 0;
+            }
+            if (!isLotteryTable && signInFilterEmpty) {
+              signInFilterEmpty.hidden = visibleRows.length !== 0;
+              container.hidden = visibleRows.length === 0;
+            }
+            const metric = document.querySelector(isLotteryTable ? '[data-metric="lotteries"]' : '[data-metric="sign-ins"]');
+            const metricValue = metric?.querySelector('.metric__value');
+            if (metricValue) metricValue.textContent = String(visibleRows.length);
+            if (isLotteryTable) {
+              const metricLabel = metric?.querySelector('[data-metric-label]');
+              if (metricLabel) metricLabel.textContent = includeCompleted ? 'Threads' : 'Active draws';
+              const sectionCount = document.querySelector('[data-lottery-section-count]');
+              if (sectionCount) sectionCount.textContent = String(visibleRows.length);
+            } else {
+              const sectionCount = document.querySelector('[data-sign-in-section-count]');
+              if (sectionCount) sectionCount.textContent = String(visibleRows.length);
+            }
+            controls.hidden = visibleRows.length <= pageSize;
           };
 
           previous.addEventListener('click', () => {
@@ -1012,9 +601,21 @@ ${APP_CSS}
             page = 0;
             renderPage();
           });
+          if (isLotteryTable) {
+            includeDrawn?.addEventListener('change', () => {
+              page = 0;
+              renderPage();
+            });
+          }
 
-          controls.hidden = false;
           renderPage();
+        });
+
+        accountFilter?.addEventListener('change', () => {
+          const metric = document.querySelector('[data-metric="accounts"]');
+          const metricValue = metric?.querySelector('.metric__value');
+          if (!metricValue) return;
+          metricValue.textContent = accountFilter.value ? '1' : (metric.dataset.total || '0');
         });
       })();
     </script>
@@ -1029,17 +630,39 @@ function formatDate(value) {
   return formatLocalDateTime(date);
 }
 
+function formatDateMinute(value) {
+  return formatDate(value).slice(0, 16);
+}
+
 function renderDrawTime(value) {
   const drawAt = String(value || '').trim();
-  if (!drawAt) return '-';
+  if (!drawAt) return '<span class="status-badge">Unknown</span>';
   return `<time datetime="${escapeAttr(drawAt)}">${escapeHtml(drawAt)}</time>`;
 }
 
 function renderDailyEngagementCount(row) {
   const count = Number(row.dailyEngagementCount) || 0;
   const date = String(row.lastEngagedDate || '').trim();
-  if (!date || count <= 0) return '-';
-  return `${escapeHtml(date)}: ${count}`;
+  if (!date || count <= 0) return '<span class="empty-value">Not recorded</span>';
+  return `<span class="count-stack"><strong>${count}</strong><small>${escapeHtml(date)}</small></span>`;
+}
+
+function renderStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const tones = {
+    signed: ' status-badge--success',
+    already_signed: ' status-badge--success',
+    success: ' status-badge--success',
+    clicked: ' status-badge--info',
+    failed: ' status-badge--danger',
+    error: ' status-badge--danger',
+  };
+  const label = normalized
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Unknown';
+  return `<span class="status-badge${tones[normalized] || ''}">${escapeHtml(label)}</span>`;
 }
 
 function formatLocalDateTime(date) {
