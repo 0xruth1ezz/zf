@@ -23,7 +23,13 @@ export function TableHeaderRow({ children }) {
 export function TableColumn({ className, ...props }) {
   return (
     <Column
-      className={cn('h-10 border-b border-border bg-muted/65 px-3 first:rounded-tl-lg last:rounded-tr-lg', className)}
+      className={cn(
+        'h-10 border-b border-border bg-muted/65 px-3 outline-none first:rounded-tl-lg last:rounded-tr-lg',
+        'data-[allows-sorting]:cursor-pointer data-[allows-sorting]:select-none data-[hovered]:bg-accent/60 data-[pressed]:bg-accent',
+        'data-[focus-visible]:relative data-[focus-visible]:z-10 data-[focus-visible]:outline-2 data-[focus-visible]:outline-offset-[-2px] data-[focus-visible]:outline-ring',
+        'data-[sort-direction]:text-foreground',
+        className,
+      )}
       {...props}
     />
   );

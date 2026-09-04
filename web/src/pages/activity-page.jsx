@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { ExternalLink, Filter, SlidersHorizontal } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Filter, SlidersHorizontal } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { AccountBadge } from '../components/account-badge';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Field } from '../components/ui/field';
@@ -26,18 +27,31 @@ import {
 } from '../data';
 
 const PAGE_SIZE = 20;
-const sortOptions = [
-  { id: 'engaged_desc', label: 'Last engaged · newest' },
-  { id: 'engaged_asc', label: 'Last engaged · oldest' },
-  { id: 'draw_asc', label: 'Draw time · soonest' },
-  { id: 'draw_desc', label: 'Draw time · latest' },
-];
+const DEFAULT_SORT_DESCRIPTOR = { column: 'engagedAt', direction: 'descending' };
 
 function compareOptional(left, right, ascending) {
   if (left && right) return ascending ? left.localeCompare(right) : right.localeCompare(left);
   if (left) return -1;
   if (right) return 1;
   return 0;
+}
+
+function SortableHeader({ children, sortDirection }) {
+  const SortIcon = sortDirection === 'ascending'
+    ? ArrowUp
+    : sortDirection === 'descending'
+      ? ArrowDown
+      : ArrowUpDown;
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {children}
+      <SortIcon
+        aria-hidden="true"
+        className={sortDirection ? 'size-3.5 text-foreground' : 'size-3.5 text-muted-foreground/65'}
+      />
+    </span>
+  );
 }
 
 function EmptyState({ title, description, onReset }) {
@@ -84,7 +98,7 @@ function Summary({ accounts, records, signIns, generatedAt }) {
   );
 }
 
-function LotteryTable({ records, page, onPageChange }) {
+function LotteryTable({ records, page, onPageChange, onSortChange, sortDescriptor }) {
   const pageCount = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const rows = records.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
@@ -96,14 +110,23 @@ function LotteryTable({ records, page, onPageChange }) {
   return (
     <>
       <div aria-label="Lottery threads table" className="overflow-x-auto rounded-lg border border-border bg-card" role="region" tabIndex={0}>
-        <Table aria-label="Lottery threads" className="min-w-[920px]">
+        <Table
+          aria-label="Lottery threads"
+          className="min-w-[920px]"
+          onSortChange={onSortChange}
+          sortDescriptor={sortDescriptor}
+        >
           <TableHeaderRow>
             <TableColumn className="w-12 text-center">#</TableColumn>
             <TableColumn className="w-36">Account</TableColumn>
             <TableColumn isRowHeader>Thread</TableColumn>
-            <TableColumn className="w-44">Draw time</TableColumn>
+            <TableColumn allowsSorting className="w-44" id="drawAt">
+              {({ sortDirection }) => <SortableHeader sortDirection={sortDirection}>Draw time</SortableHeader>}
+            </TableColumn>
             <TableColumn className="w-32">Daily count</TableColumn>
-            <TableColumn className="hidden w-48 xl:table-cell">Last engaged</TableColumn>
+            <TableColumn allowsSorting className="hidden w-48 xl:table-cell" id="engagedAt">
+              {({ sortDirection }) => <SortableHeader sortDirection={sortDirection}>Last engaged</SortableHeader>}
+            </TableColumn>
             <TableColumn className="hidden w-32 2xl:table-cell">Post ID</TableColumn>
           </TableHeaderRow>
           <TableRows items={rows}>
@@ -112,7 +135,7 @@ function LotteryTable({ records, page, onPageChange }) {
                 <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
                   {currentPage * PAGE_SIZE + rows.indexOf(record) + 1}
                 </TableCell>
-                <TableCell><code className="code-label">{record.accountId}</code></TableCell>
+                <TableCell><AccountBadge accountId={record.accountId} /></TableCell>
                 <TableCell className="min-w-72 max-w-xl text-left">
                   <a className="inline-flex items-start gap-1.5 font-medium text-foreground underline decoration-border underline-offset-4 hover:text-primary hover:decoration-primary" href={record.url} rel="noreferrer" target="_blank">
                     <span className="whitespace-normal text-pretty">{record.title}</span>
@@ -171,8 +194,8 @@ function SignInTable({ signIns, page, onPageChange }) {
                 <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
                   {currentPage * PAGE_SIZE + rows.indexOf(record) + 1}
                 </TableCell>
-                <TableCell className="text-left"><code className="code-label">{record.accountId}</code></TableCell>
-                <TableCell className="text-left"><code className="code-label">{record.signInDate}</code></TableCell>
+                <TableCell className="text-left"><AccountBadge accountId={record.accountId} /></TableCell>
+                <TableCell className="text-left"><time className="code-label" data-kind="date" dateTime={record.signInDate}>{record.signInDate}</time></TableCell>
                 <TableCell className="text-left tabular-nums"><time dateTime={record.signedAt}>{formatDateTime(record.signedAt)}</time></TableCell>
                 <TableCell className="text-left"><Badge variant={statusVariant(record.status)}>{humanizeStatus(record.status)}</Badge></TableCell>
                 <TableCell className="min-w-56 text-left whitespace-normal text-muted-foreground">{record.message || '—'}</TableCell>
@@ -188,7 +211,7 @@ function SignInTable({ signIns, page, onPageChange }) {
 
 export function ActivityPage({ data }) {
   const [account, setAccount] = useState('all');
-  const [sort, setSort] = useState('engaged_desc');
+  const [sortDescriptor, setSortDescriptor] = useState(DEFAULT_SORT_DESCRIPTOR);
   const [search, setSearch] = useState('');
   const [includeDrawn, setIncludeDrawn] = useState(false);
   const [includeUnknown, setIncludeUnknown] = useState(false);
@@ -215,12 +238,13 @@ export function ActivityPage({ data }) {
         return includeDrawn || draw > now;
       })
       .sort((left, right) => {
-        const byValue = sort.startsWith('draw')
-          ? compareOptional(formatDrawTime(left.drawAt) === 'Unknown' ? '' : formatDrawTime(left.drawAt), formatDrawTime(right.drawAt) === 'Unknown' ? '' : formatDrawTime(right.drawAt), sort === 'draw_asc')
-          : compareOptional(left.engagedAt, right.engagedAt, sort === 'engaged_asc');
+        const ascending = sortDescriptor.direction === 'ascending';
+        const byValue = sortDescriptor.column === 'drawAt'
+          ? compareOptional(formatDrawTime(left.drawAt) === 'Unknown' ? '' : formatDrawTime(left.drawAt), formatDrawTime(right.drawAt) === 'Unknown' ? '' : formatDrawTime(right.drawAt), ascending)
+          : compareOptional(left.engagedAt, right.engagedAt, ascending);
         return byValue || left.accountId.localeCompare(right.accountId) || left.postId.localeCompare(right.postId);
       });
-  }, [account, data.records, includeDrawn, includeUnknown, search, sort]);
+  }, [account, data.records, includeDrawn, includeUnknown, search, sortDescriptor]);
 
   const filteredSignIns = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -237,11 +261,23 @@ export function ActivityPage({ data }) {
 
   function clearFilters() {
     setAccount('all');
-    setSort('engaged_desc');
+    setSortDescriptor(DEFAULT_SORT_DESCRIPTOR);
     setSearch('');
     setIncludeDrawn(false);
     setIncludeUnknown(false);
     resetPages();
+  }
+
+  function handleSortChange(nextDescriptor) {
+    setSortDescriptor((currentDescriptor) => (
+      currentDescriptor.column === nextDescriptor.column
+        ? nextDescriptor
+        : {
+            column: nextDescriptor.column,
+            direction: nextDescriptor.column === 'engagedAt' ? 'descending' : 'ascending',
+          }
+    ));
+    setLotteryPage(0);
   }
 
   return (
@@ -250,7 +286,7 @@ export function ActivityPage({ data }) {
       <Summary accounts={data.accounts} generatedAt={data.generatedAt} records={data.records} signIns={data.signIns} />
 
       <div className="mb-6 rounded-lg border border-border bg-card p-3 shadow-xs">
-        <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_200px_220px]">
+        <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_220px]">
           <Field
             aria-label="Search activity"
             label="Search"
@@ -261,9 +297,6 @@ export function ActivityPage({ data }) {
           <Select label="Account" onSelectionChange={(key) => { setAccount(String(key)); resetPages(); }} selectedKey={account}>
             <SelectItem id="all">All accounts</SelectItem>
             {accountIds.map((id) => <SelectItem key={id} id={id}>{id}</SelectItem>)}
-          </Select>
-          <Select label="Sort lotteries" onSelectionChange={(key) => { setSort(String(key)); setLotteryPage(0); }} selectedKey={sort}>
-            {sortOptions.map((item) => <SelectItem key={item.id} id={item.id}>{item.label}</SelectItem>)}
           </Select>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3">
@@ -289,7 +322,15 @@ export function ActivityPage({ data }) {
               onReset={clearFilters}
               title="No matching lottery threads"
             />
-          ) : <LotteryTable onPageChange={setLotteryPage} page={lotteryPage} records={filteredRecords} />}
+          ) : (
+            <LotteryTable
+              onPageChange={setLotteryPage}
+              onSortChange={handleSortChange}
+              page={lotteryPage}
+              records={filteredRecords}
+              sortDescriptor={sortDescriptor}
+            />
+          )}
         </TabPanel>
         <TabPanel className="outline-none" id="sign-ins">
           {filteredSignIns.length === 0 ? (

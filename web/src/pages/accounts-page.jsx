@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Database, KeyRound, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
+import { AccountBadge } from '../components/account-badge';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogTrigger } from '../components/ui/dialog';
@@ -83,7 +84,7 @@ function AccountRow({ account, readOnly, onNotice }) {
             <KeyRound aria-hidden="true" className="size-4" />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold"><code className="font-[inherit]">{account.id}</code></h2>
+            <h2 className="flex min-w-0"><AccountBadge accountId={account.id} className="max-w-full" /></h2>
             <p className="mt-0.5 text-xs text-muted-foreground">Updated {formatDateTime(account.updatedAt)}</p>
           </div>
         </div>
