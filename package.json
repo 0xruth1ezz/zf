@@ -7,10 +7,12 @@
     "start": "node zfrontier-lottery-crawler.js",
     "dry-run": "node zfrontier-lottery-crawler.js --dry-run",
     "view": "node view-engaged-lotteries.js",
-    "build:css": "CI=1 unocss ui.css -c uno.config.mjs -o ui.generated.css",
-    "watch:css": "npm run build:css -- --watch",
-    "serve:report": "npm run build:css && cargo run --bin zfrontier-report-server",
-    "check": "npm run build:css && npm run check:node && cargo check",
+    "build:ui": "vite build",
+    "watch:ui": "vite build --watch",
+    "build:css": "npm run build:ui",
+    "watch:css": "npm run watch:ui",
+    "serve:report": "npm run build:ui && cargo run --bin zfrontier-report-server",
+    "check": "npm run build:ui && npm run check:node && cargo test",
     "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check view-engaged-lotteries.js"
   },
   "keywords": [],
@@ -23,8 +25,18 @@
     "playwright": "^1.60.0"
   },
   "devDependencies": {
-    "@unocss/cli": "^66.9.2",
-    "@unocss/transformer-directives": "^66.9.2",
-    "unocss": "^66.9.2"
+    "@tailwindcss/vite": "^4.1.13",
+    "@tanstack/react-query": "^5.87.1",
+    "@vitejs/plugin-react": "^5.0.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.542.0",
+    "react": "^19.1.1",
+    "react-aria-components": "^1.12.1",
+    "react-dom": "^19.1.1",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^4.1.13",
+    "tw-animate-css": "^1.3.8",
+    "vite": "^7.1.4"
   }
 }

@@ -3,7 +3,8 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
 const DEFAULT_ACCOUNT_ID = 'default';
-const APP_CSS = fs.readFileSync(path.join(__dirname, 'ui.generated.css'), 'utf8');
+const APP_CSS = fs.readFileSync(path.join(__dirname, 'dist/assets/app.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, 'dist/assets/app.js'), 'utf8');
 
 function openEngagedStore(dbPath, htmlPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -296,7 +297,35 @@ function renderEngagementHtml(store) {
   const lotteryRows = listEngagements(store);
   const signInRows = listSignIns(store);
   const accountRows = listAccounts(store);
-  fs.writeFileSync(store.htmlPath, buildHtml(lotteryRows, signInRows, accountRows), 'utf8');
+  fs.writeFileSync(store.htmlPath, buildSnapshotHtml(lotteryRows, signInRows, accountRows), 'utf8');
+}
+
+function buildSnapshotHtml(lotteryRows, signInRows, accountRows) {
+  const data = JSON.stringify({
+    records: lotteryRows,
+    signIns: signInRows.map(({ url: _url, ...row }) => row),
+    accounts: accountRows.map(({ password: _password, ...account }) => account),
+    generatedAt: new Date().toISOString(),
+    isSnapshot: true,
+  }).replace(/</g, '\\u003c');
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f7f7">
+    <meta name="description" content="Read-only zFrontier crawler operations snapshot">
+    <title>zFrontier Operations Snapshot</title>
+    <style>${APP_CSS}</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>window.__ZF_INITIAL_DATA__=${data};</script>
+    <script type="module">${APP_JS}</script>
+  </body>
+</html>
+`;
 }
 
 function renderAppBar(activePage) {

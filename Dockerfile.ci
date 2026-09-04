@@ -5,10 +5,11 @@ FROM node:24-bookworm-slim AS ui-builder
 WORKDIR /src
 
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --include=dev
 
-COPY uno.config.mjs ui.css ./
-RUN npm run build:css
+COPY index.html vite.config.mjs components.json ./
+COPY web ./web
+RUN npm run build:ui
 
 FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
@@ -35,7 +36,7 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 COPY engaged-store.js view-engaged-lotteries.js zfrontier-lottery-crawler.js ./
-COPY --from=ui-builder /src/ui.generated.css ./ui.generated.css
+COPY --from=ui-builder /src/dist ./dist
 COPY target/docker/${TARGETARCH}/zfrontier-report-server /usr/local/bin/zfrontier-report-server
 COPY docker/entrypoint.sh /usr/local/bin/zfrontier-entrypoint
 
