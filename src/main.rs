@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection};
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const APP_CSS: &str = include_str!("../ui.generated.css");
+const REPORT_PAGE_SIZE: usize = 20;
 
 #[derive(Debug)]
 struct Record {
@@ -19,6 +21,60 @@ struct Record {
     last_engaged_date: String,
     daily_engagement_count: i64,
     engaged_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LotterySortOrder {
+    EngagedDesc,
+    EngagedAsc,
+    DrawAsc,
+    DrawDesc,
+}
+
+impl LotterySortOrder {
+    fn from_query(value: Option<&str>) -> Self {
+        match value.map(|value| value.trim()) {
+            Some("engaged_asc") => Self::EngagedAsc,
+            Some("draw_asc") => Self::DrawAsc,
+            Some("draw_desc") => Self::DrawDesc,
+            _ => Self::EngagedDesc,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::EngagedDesc => "engaged_desc",
+            Self::EngagedAsc => "engaged_asc",
+            Self::DrawAsc => "draw_asc",
+            Self::DrawDesc => "draw_desc",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PageWindow {
+    current: usize,
+    page_count: usize,
+    start: usize,
+    end: usize,
+    total: usize,
+}
+
+impl PageWindow {
+    fn new(total: usize, requested_page: usize) -> Self {
+        let page_count = total.div_ceil(REPORT_PAGE_SIZE).max(1);
+        let current = requested_page.clamp(1, page_count);
+        let start = ((current - 1) * REPORT_PAGE_SIZE).min(total);
+        let end = (start + REPORT_PAGE_SIZE).min(total);
+
+        Self {
+            current,
+            page_count,
+            start,
+            end,
+            total,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -892,14 +948,30 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
     let include_drawn = query_flag_enabled(&query_values, "include_drawn");
+    let include_unknown = query_flag_enabled(&query_values, "include_unknown");
+    let sort_order = LotterySortOrder::from_query(query_values.get("sort").map(String::as_str));
     let all_records = load_records(db_path)?;
     let all_sign_ins = load_sign_ins(db_path)?;
     let accounts = load_accounts(db_path)?;
     let account_ids = report_account_ids(&all_records, &all_sign_ins, &accounts);
     let account_records = filter_records_by_account(&all_records, selected_account);
     let now_china_minute = sqlite_china_now_minute(db_path)?;
-    let records = filter_records_by_draw_status(account_records, include_drawn, &now_china_minute);
+    let mut records = filter_records_by_draw_status(
+        account_records,
+        include_drawn,
+        include_unknown,
+        &now_china_minute,
+    );
+    sort_lottery_records(&mut records, sort_order);
     let sign_ins = filter_sign_ins_by_account(&all_sign_ins, selected_account);
+    let lottery_page = PageWindow::new(
+        records.len(),
+        query_page_number(&query_values, "lottery_page"),
+    );
+    let sign_in_page = PageWindow::new(
+        sign_ins.len(),
+        query_page_number(&query_values, "sign_in_page"),
+    );
     let account_count = selected_account
         .map(|account| usize::from(account_ids.iter().any(|id| id == account)))
         .unwrap_or_else(|| unique_account_count(&all_records, &all_sign_ins, &accounts));
@@ -915,7 +987,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         ("Sign-ins", sign_ins.len().to_string()),
         ("Updated", now_china_minute.clone()),
     ]);
-    let rows = records
+    let rows = records[lottery_page.start..lottery_page.end]
         .iter()
         .enumerate()
         .map(|(index, record)| {
@@ -932,7 +1004,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
           </tr>"#,
                 escape_attr(&record.account_id),
                 escape_attr(&record.draw_at),
-                index + 1,
+                lottery_page.start + index + 1,
                 escape_html(&record.account_id),
                 escape_attr(&record.url),
                 escape_html(&record.title),
@@ -945,7 +1017,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         })
         .collect::<String>();
 
-    let sign_in_rows = sign_ins
+    let sign_in_rows = sign_ins[sign_in_page.start..sign_in_page.end]
         .iter()
         .enumerate()
         .map(|(index, record)| {
@@ -960,7 +1032,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             <td>{}</td>
           </tr>"#,
                 escape_attr(&record.account_id),
-                index + 1,
+                sign_in_page.start + index + 1,
                 escape_html(&record.account_id),
                 escape_html(&record.sign_in_date),
                 escape_attr(&record.signed_at),
@@ -971,10 +1043,10 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         })
         .collect::<String>();
 
-    let empty = if records.is_empty() && include_drawn {
+    let empty = if records.is_empty() && include_drawn && include_unknown {
         r#"<div class="empty panel"><strong>No lottery threads found</strong><span>The crawler has not recorded any lottery threads for the selected account.</span></div>"#
     } else if records.is_empty() {
-        r#"<div class="empty panel"><strong>No active lottery threads</strong><span>Turn on Include drawn to show threads whose draw time has passed.</span></div>"#
+        r#"<div class="empty panel"><strong>No matching lottery threads</strong><span>Change the draw status filters to broaden the list.</span></div>"#
     } else {
         ""
     };
@@ -988,9 +1060,19 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
     let table = if records.is_empty() {
         String::new()
     } else {
+        let pagination = render_report_pagination(
+            "Lottery threads",
+            "lottery_page",
+            lottery_page,
+            selected_account,
+            include_drawn,
+            include_unknown,
+            sort_order,
+            Some(("sign_in_page", sign_in_page.current)),
+        );
         format!(
             r#"<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Lottery threads table">
-        <table class="lottery-table" data-paginated-table data-page-size="20">
+        <table class="lottery-table">
         <thead>
           <tr>
             <th scope="col">#</th>
@@ -1006,20 +1088,26 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         </tbody>
       </table>
       </div>
-      <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Previous</button>
-        <span data-page-status></span>
-        <button type="button" data-page-next>Next</button>
-      </div>"#
+      {pagination}"#
         )
     };
 
     let sign_in_table = if sign_ins.is_empty() {
         String::new()
     } else {
+        let pagination = render_report_pagination(
+            "Daily sign-ins",
+            "sign_in_page",
+            sign_in_page,
+            selected_account,
+            include_drawn,
+            include_unknown,
+            sort_order,
+            Some(("lottery_page", lottery_page.current)),
+        );
         format!(
             r#"<div class="panel table-container report-table" data-table-container tabindex="0" aria-label="Daily sign-ins table">
-        <table data-paginated-table data-page-size="20">
+        <table>
         <thead>
           <tr>
             <th scope="col">#</th>
@@ -1034,11 +1122,7 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         </tbody>
       </table>
       </div>
-      <div class="pagination" data-pagination hidden>
-        <button type="button" data-page-prev>Previous</button>
-        <span data-page-status></span>
-        <button type="button" data-page-next>Next</button>
-      </div>"#
+      {pagination}"#
         )
     };
 
@@ -1064,23 +1148,37 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         {}
       </header>
       <form class="toolbar" method="get" action="/report" aria-label="Report filters" data-report-filter>
-        <label class="field" for="account-filter">
-          <span>Account</span>
-          <select id="account-filter" name="account" data-account-filter>
-            <option value=""{}>All accounts</option>
-            {}
-          </select>
-        </label>
-        <label class="switch">
-          <input name="include_drawn" type="checkbox" value="1" data-include-drawn{}>
-          <span>Include drawn</span>
-        </label>
+        <div class="toolbar__filters">
+          <label class="field" for="account-filter">
+            <span>Account</span>
+            <select id="account-filter" name="account" data-account-filter>
+              <option value=""{}>All accounts</option>
+              {}
+            </select>
+          </label>
+          <label class="field field--sort" for="lottery-sort">
+            <span>Sort order</span>
+            <select id="lottery-sort" name="sort" data-lottery-sort>
+              {}
+            </select>
+          </label>
+        </div>
+        <div class="toolbar__toggles">
+          <label class="switch">
+            <input name="include_drawn" type="checkbox" value="1" data-include-drawn{}>
+            <span>Include drawn</span>
+          </label>
+          <label class="switch">
+            <input name="include_unknown" type="checkbox" value="1" data-include-unknown{}>
+            <span>Include unknown draw time</span>
+          </label>
+        </div>
       </form>
       <section>
         <div class="section-heading">
           <div>
             <h2>Lottery threads <span class="section-count">{}</span></h2>
-            <p class="section-note">Active draws by default, with draw time and per-day engagement count.</p>
+            <p class="section-note">Draw schedule and per-day engagement activity.</p>
           </div>
         </div>
         {}
@@ -1103,6 +1201,8 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         const formatLocalDateTime = (date) => `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}} ${{pad(date.getHours())}}:${{pad(date.getMinutes())}}:${{pad(date.getSeconds())}}`;
         const accountFilter = document.querySelector('[data-account-filter]');
         const includeDrawn = document.querySelector('[data-include-drawn]');
+        const includeUnknown = document.querySelector('[data-include-unknown]');
+        const lotterySort = document.querySelector('[data-lottery-sort]');
         const reportFilter = document.querySelector('[data-report-filter]');
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {{
@@ -1111,55 +1211,6 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
           if (Number.isNaN(date.getTime())) return;
           node.textContent = formatLocalDateTime(date);
           node.title = value;
-        }});
-
-        document.querySelectorAll('table[data-paginated-table]').forEach((table) => {{
-          const rows = Array.from(table.querySelectorAll('tbody tr'));
-          const container = table.closest('[data-table-container]');
-          const controls = container?.nextElementSibling?.matches('[data-pagination]')
-            ? container.nextElementSibling
-            : table.nextElementSibling?.matches('[data-pagination]')
-              ? table.nextElementSibling
-              : null;
-          const pageSize = Number(table.dataset.pageSize || 20);
-          if (!controls || rows.length === 0 || pageSize <= 0) return;
-
-          let page = 0;
-          const previous = controls.querySelector('[data-page-prev]');
-          const next = controls.querySelector('[data-page-next]');
-          const status = controls.querySelector('[data-page-status]');
-
-          const renderPage = () => {{
-            const selectedAccount = accountFilter?.value || '';
-            const visibleRows = rows.filter((row) => !selectedAccount || row.dataset.accountId === selectedAccount);
-            const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
-            if (page >= pageCount) page = pageCount - 1;
-            const start = page * pageSize;
-            const end = Math.min(start + pageSize, visibleRows.length);
-            rows.forEach((row) => {{
-              row.hidden = true;
-            }});
-            visibleRows.slice(start, end).forEach((row) => {{
-              row.hidden = false;
-            }});
-            previous.disabled = page === 0 || visibleRows.length === 0;
-            next.disabled = page >= pageCount - 1 || visibleRows.length === 0;
-            status.textContent = visibleRows.length === 0
-              ? '0 of 0'
-              : `${{start + 1}}-${{end}} of ${{visibleRows.length}}`;
-            controls.hidden = visibleRows.length <= pageSize;
-          }};
-
-          previous.addEventListener('click', () => {{
-            if (page === 0) return;
-            page -= 1;
-            renderPage();
-          }});
-          next.addEventListener('click', () => {{
-            page += 1;
-            renderPage();
-          }});
-          renderPage();
         }});
 
         const submitFilters = () => {{
@@ -1171,6 +1222,8 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
         }};
         accountFilter?.addEventListener('change', submitFilters);
         includeDrawn?.addEventListener('change', submitFilters);
+        includeUnknown?.addEventListener('change', submitFilters);
+        lotterySort?.addEventListener('change', submitFilters);
       }})();
     </script>
   </body>
@@ -1185,7 +1238,9 @@ fn render_report(db_path: &Path, query: &str) -> rusqlite::Result<String> {
             ""
         },
         account_filter_options,
+        render_lottery_sort_options(sort_order),
         if include_drawn { " checked" } else { "" },
+        if include_unknown { " checked" } else { "" },
         records.len(),
         empty,
         table,
@@ -1230,26 +1285,70 @@ fn filter_records_by_account<'a>(
 fn filter_records_by_draw_status<'a>(
     records: Vec<&'a Record>,
     include_drawn: bool,
+    include_unknown: bool,
     now_china_minute: &str,
 ) -> Vec<&'a Record> {
-    if include_drawn {
-        return records;
-    }
-
     records
         .into_iter()
-        .filter(|record| !has_drawn(&record.draw_at, now_china_minute))
+        .filter(|record| match draw_minute_key(&record.draw_at) {
+            Some(draw_minute) => {
+                include_drawn
+                    || now_china_minute.is_empty()
+                    || draw_minute.as_str() > now_china_minute
+            }
+            None => include_unknown,
+        })
         .collect()
 }
 
-fn has_drawn(draw_at: &str, now_china_minute: &str) -> bool {
-    if now_china_minute.is_empty() {
-        return false;
-    }
+fn sort_lottery_records(records: &mut [&Record], sort_order: LotterySortOrder) {
+    records.sort_by(|left, right| {
+        let ordering = match sort_order {
+            LotterySortOrder::EngagedDesc => compare_optional_sort_values(
+                non_empty_sort_value(&left.engaged_at),
+                non_empty_sort_value(&right.engaged_at),
+                false,
+            ),
+            LotterySortOrder::EngagedAsc => compare_optional_sort_values(
+                non_empty_sort_value(&left.engaged_at),
+                non_empty_sort_value(&right.engaged_at),
+                true,
+            ),
+            LotterySortOrder::DrawAsc => compare_optional_sort_values(
+                draw_minute_key(&left.draw_at),
+                draw_minute_key(&right.draw_at),
+                true,
+            ),
+            LotterySortOrder::DrawDesc => compare_optional_sort_values(
+                draw_minute_key(&left.draw_at),
+                draw_minute_key(&right.draw_at),
+                false,
+            ),
+        };
 
-    draw_minute_key(draw_at)
-        .map(|draw_minute| draw_minute.as_str() <= now_china_minute)
-        .unwrap_or(false)
+        ordering
+            .then_with(|| left.account_id.cmp(&right.account_id))
+            .then_with(|| left.post_id.cmp(&right.post_id))
+    });
+}
+
+fn non_empty_sort_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn compare_optional_sort_values(
+    left: Option<String>,
+    right: Option<String>,
+    ascending: bool,
+) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) if ascending => left.cmp(&right),
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 fn draw_minute_key(value: &str) -> Option<String> {
@@ -1319,6 +1418,103 @@ fn render_account_filter_options(account_ids: &[String], selected_account: Optio
         })
         .collect::<Vec<_>>()
         .join("\n            ")
+}
+
+fn render_lottery_sort_options(selected: LotterySortOrder) -> String {
+    [
+        (LotterySortOrder::EngagedDesc, "Last engaged: newest first"),
+        (LotterySortOrder::EngagedAsc, "Last engaged: oldest first"),
+        (LotterySortOrder::DrawAsc, "Draw time: soonest first"),
+        (LotterySortOrder::DrawDesc, "Draw time: latest first"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        let selected_attr = if *value == selected { " selected" } else { "" };
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value.value(),
+            selected_attr,
+            label
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n              ")
+}
+
+fn render_report_pagination(
+    label: &str,
+    page_parameter: &str,
+    page: PageWindow,
+    selected_account: Option<&str>,
+    include_drawn: bool,
+    include_unknown: bool,
+    sort_order: LotterySortOrder,
+    other_page: Option<(&str, usize)>,
+) -> String {
+    if page.total == 0 || page.page_count <= 1 {
+        return String::new();
+    }
+
+    let mut state = vec![render_hidden_input("sort", sort_order.value())];
+    if let Some(account) = selected_account {
+        state.push(render_hidden_input("account", account));
+    }
+    if include_drawn {
+        state.push(render_hidden_input("include_drawn", "1"));
+    }
+    if include_unknown {
+        state.push(render_hidden_input("include_unknown", "1"));
+    }
+    if let Some((parameter, current)) = other_page.filter(|(_, current)| *current > 1) {
+        state.push(render_hidden_input(parameter, &current.to_string()));
+    }
+
+    let previous_page = page.current.saturating_sub(1).max(1);
+    let next_page = (page.current + 1).min(page.page_count);
+    let previous_disabled = if page.current == 1 { " disabled" } else { "" };
+    let next_disabled = if page.current == page.page_count {
+        " disabled"
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<form class="pagination" method="get" action="/report" aria-label="{} pagination">
+        {}
+        <button type="submit" name="{}" value="{}"{}>Previous</button>
+        <span class="pagination__status">{}-{} of {} (page {} of {})</span>
+        <button type="submit" name="{}" value="{}"{}>Next</button>
+      </form>"#,
+        escape_attr(label),
+        state.join("\n        "),
+        page_parameter,
+        previous_page,
+        previous_disabled,
+        page.start + 1,
+        page.end,
+        page.total,
+        page.current,
+        page.page_count,
+        page_parameter,
+        next_page,
+        next_disabled,
+    )
+}
+
+fn render_hidden_input(name: &str, value: &str) -> String {
+    format!(
+        r#"<input type="hidden" name="{}" value="{}">"#,
+        escape_attr(name),
+        escape_attr(value)
+    )
+}
+
+fn query_page_number(values: &HashMap<String, String>, key: &str) -> usize {
+    values
+        .get(key)
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
 }
 
 fn query_flag_enabled(values: &HashMap<String, String>, key: &str) -> bool {
@@ -1663,33 +1859,110 @@ mod tests {
     }
 
     #[test]
-    fn hides_drawn_records_by_default_and_keeps_unknown_draw_times() {
+    fn hides_drawn_and_unknown_records_by_default() {
         let records = [
             record("drawn", "2026-09-04 12:00"),
             record("active", "2026-09-04 12:01"),
             record("unknown", ""),
         ];
 
-        let filtered =
-            filter_records_by_draw_status(records.iter().collect(), false, "2026-09-04 12:00");
+        let filtered = filter_records_by_draw_status(
+            records.iter().collect(),
+            false,
+            false,
+            "2026-09-04 12:00",
+        );
         let post_ids = filtered
             .iter()
             .map(|record| record.post_id.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(post_ids, vec!["active", "unknown"]);
+        assert_eq!(post_ids, vec!["active"]);
     }
 
     #[test]
-    fn include_drawn_returns_every_record() {
+    fn draw_status_filters_are_independent() {
         let records = [
             record("drawn", "2026-09-04 12:00"),
             record("active", "2026-09-04 12:01"),
+            record("unknown", ""),
         ];
 
-        let filtered =
-            filter_records_by_draw_status(records.iter().collect(), true, "2026-09-04 12:00");
+        let include_drawn = filter_records_by_draw_status(
+            records.iter().collect(),
+            true,
+            false,
+            "2026-09-04 12:00",
+        );
+        let include_unknown = filter_records_by_draw_status(
+            records.iter().collect(),
+            false,
+            true,
+            "2026-09-04 12:00",
+        );
+        let include_both =
+            filter_records_by_draw_status(records.iter().collect(), true, true, "2026-09-04 12:00");
 
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(
+            include_drawn
+                .iter()
+                .map(|record| record.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["drawn", "active"]
+        );
+        assert_eq!(
+            include_unknown
+                .iter()
+                .map(|record| record.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["active", "unknown"]
+        );
+        assert_eq!(include_both.len(), 3);
+    }
+
+    #[test]
+    fn sorts_draw_and_engagement_times_with_unknown_values_last() {
+        let mut early = record("early", "2026-09-04 13:00");
+        early.engaged_at = "2026-09-04T01:00:00.000Z".to_string();
+        let mut late = record("late", "2026-09-04 14:00");
+        late.engaged_at = "2026-09-04T02:00:00.000Z".to_string();
+        let unknown = record("unknown", "");
+        let records = [late, unknown, early];
+
+        let mut draw_ascending = records.iter().collect::<Vec<_>>();
+        sort_lottery_records(&mut draw_ascending, LotterySortOrder::DrawAsc);
+        assert_eq!(
+            draw_ascending
+                .iter()
+                .map(|record| record.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["early", "late", "unknown"]
+        );
+
+        let mut engaged_descending = records.iter().collect::<Vec<_>>();
+        sort_lottery_records(&mut engaged_descending, LotterySortOrder::EngagedDesc);
+        assert_eq!(
+            engaged_descending
+                .iter()
+                .map(|record| record.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["late", "early", "unknown"]
+        );
+    }
+
+    #[test]
+    fn pagination_clamps_pages_and_tracks_row_ranges() {
+        assert_eq!(
+            PageWindow::new(45, 2),
+            PageWindow {
+                current: 2,
+                page_count: 3,
+                start: 20,
+                end: 40,
+                total: 45,
+            }
+        );
+        assert_eq!(PageWindow::new(45, 99).current, 3);
+        assert_eq!(PageWindow::new(0, 4).current, 1);
     }
 }

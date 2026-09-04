@@ -352,7 +352,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
     { label: 'Updated', value: formatDateMinute(generatedAt) },
   ]);
   const lotteryTableRows = lotteryRows.map((row, index) => `
-          <tr data-account-id="${escapeAttr(row.accountId)}" data-draw-at="${escapeAttr(row.drawAt)}">
+          <tr data-account-id="${escapeAttr(row.accountId)}" data-draw-at="${escapeAttr(row.drawAt)}" data-engaged-at="${escapeAttr(row.engagedAt)}">
             <td>${index + 1}</td>
             <td><code>${escapeHtml(row.accountId)}</code></td>
             <td><a href="${escapeAttr(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.title)}</a></td>
@@ -373,7 +373,7 @@ function buildHtml(lotteryRows, signInRows, accountRows = []) {
 
   const emptyLotteryState = lotteryRows.length === 0
     ? '<div class="empty panel"><strong>No lottery threads found</strong><span>The crawler has not recorded any lottery threads yet.</span></div>'
-    : '<div class="empty panel" data-lottery-filter-empty hidden><strong>No active lottery threads</strong><span>Turn on Include drawn to show threads whose draw time has passed.</span></div>';
+    : '<div class="empty panel" data-lottery-filter-empty hidden><strong>No matching lottery threads</strong><span>Change the draw status filters to broaden the list.</span></div>';
   const emptySignInState = signInRows.length === 0
     ? '<div class="empty panel"><strong>No daily sign-ins yet</strong><span>Daily sign-in attempts will appear here after the crawler records them.</span></div>'
     : '<div class="empty panel" data-sign-in-filter-empty hidden><strong>No sign-ins for this account</strong><span>Choose another account to review its sign-in history.</span></div>';
@@ -399,23 +399,40 @@ ${APP_CSS}
         ${metrics}
       </header>
       <section class="toolbar" aria-label="Report filters">
-        <label class="field" for="account-filter">
-          <span>Account</span>
-          <select id="account-filter" data-account-filter>
-            <option value="">All accounts</option>
-            ${accountFilterOptions}
-          </select>
-        </label>
-        <label class="switch">
-          <input type="checkbox" data-include-drawn>
-          <span>Include drawn</span>
-        </label>
+        <div class="toolbar__filters">
+          <label class="field" for="account-filter">
+            <span>Account</span>
+            <select id="account-filter" data-account-filter>
+              <option value="">All accounts</option>
+              ${accountFilterOptions}
+            </select>
+          </label>
+          <label class="field field--sort" for="lottery-sort">
+            <span>Sort order</span>
+            <select id="lottery-sort" data-lottery-sort>
+              <option value="engaged_desc">Last engaged: newest first</option>
+              <option value="engaged_asc">Last engaged: oldest first</option>
+              <option value="draw_asc">Draw time: soonest first</option>
+              <option value="draw_desc">Draw time: latest first</option>
+            </select>
+          </label>
+        </div>
+        <div class="toolbar__toggles">
+          <label class="switch">
+            <input type="checkbox" data-include-drawn>
+            <span>Include drawn</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" data-include-unknown>
+            <span>Include unknown draw time</span>
+          </label>
+        </div>
       </section>
       <section>
         <div class="section-heading">
           <div>
             <h2>Lottery threads <span class="section-count" data-lottery-section-count>${lotteryRows.length}</span></h2>
-            <p class="section-note">Active draws by default, with draw time and per-day engagement count.</p>
+            <p class="section-note">Draw schedule and per-day engagement activity.</p>
           </div>
         </div>
         ${emptyLotteryState}
@@ -478,6 +495,8 @@ ${APP_CSS}
         const pad = (value) => String(value).padStart(2, '0');
         const accountFilter = document.querySelector('[data-account-filter]');
         const includeDrawn = document.querySelector('[data-include-drawn]');
+        const includeUnknown = document.querySelector('[data-include-unknown]');
+        const lotterySort = document.querySelector('[data-lottery-sort]');
         const lotteryFilterEmpty = document.querySelector('[data-lottery-filter-empty]');
         const signInFilterEmpty = document.querySelector('[data-sign-in-filter-empty]');
         const formatLocalDateTime = (date) => (
@@ -510,6 +529,31 @@ ${APP_CSS}
           if (!match) return '';
           return match[1] + '-' + pad(match[2]) + '-' + pad(match[3]) + ' ' + pad(match[4]) + ':' + match[5];
         };
+        const compareOptionalValues = (left, right, ascending) => {
+          if (left && right) return ascending ? left.localeCompare(right) : right.localeCompare(left);
+          if (left) return -1;
+          if (right) return 1;
+          return 0;
+        };
+        const compareLotteryRows = (left, right) => {
+          const order = lotterySort?.value || 'engaged_desc';
+          let comparison = 0;
+          if (order === 'draw_asc' || order === 'draw_desc') {
+            comparison = compareOptionalValues(
+              drawMinuteKey(left.dataset.drawAt),
+              drawMinuteKey(right.dataset.drawAt),
+              order === 'draw_asc',
+            );
+          } else {
+            comparison = compareOptionalValues(
+              left.dataset.engagedAt || '',
+              right.dataset.engagedAt || '',
+              order === 'engaged_asc',
+            );
+          }
+          return comparison
+            || (left.dataset.accountId || '').localeCompare(right.dataset.accountId || '');
+        };
 
         document.querySelectorAll('time[data-local-datetime]').forEach((node) => {
           const value = node.getAttribute('datetime');
@@ -539,12 +583,19 @@ ${APP_CSS}
           const renderPage = () => {
             const selectedAccount = accountFilter?.value || '';
             const includeCompleted = includeDrawn?.checked || false;
+            const includeUnknownDrawTime = includeUnknown?.checked || false;
             const nowMinute = chinaMinuteKey();
-            const visibleRows = rows.filter((row) => {
+            const orderedRows = isLotteryTable ? rows.slice().sort(compareLotteryRows) : rows;
+            if (isLotteryTable) {
+              const body = table.querySelector('tbody');
+              orderedRows.forEach((row) => body?.appendChild(row));
+            }
+            const visibleRows = orderedRows.filter((row) => {
               if (selectedAccount && row.dataset.accountId !== selectedAccount) return false;
-              if (!isLotteryTable || includeCompleted) return true;
+              if (!isLotteryTable) return true;
               const drawMinute = drawMinuteKey(row.dataset.drawAt);
-              return !drawMinute || drawMinute > nowMinute;
+              if (!drawMinute) return includeUnknownDrawTime;
+              return includeCompleted || drawMinute > nowMinute;
             });
             const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
             if (page >= pageCount) page = pageCount - 1;
@@ -603,6 +654,14 @@ ${APP_CSS}
           });
           if (isLotteryTable) {
             includeDrawn?.addEventListener('change', () => {
+              page = 0;
+              renderPage();
+            });
+            includeUnknown?.addEventListener('change', () => {
+              page = 0;
+              renderPage();
+            });
+            lotterySort?.addEventListener('change', () => {
               page = 0;
               renderPage();
             });

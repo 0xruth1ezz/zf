@@ -276,7 +276,7 @@ main {
 }
 
 .toolbar {
-  @apply mb-6 flex items-end justify-between gap-4 rounded-[var(--radius)] bg-[var(--surface)] px-3 py-[11px];
+  @apply mb-6 flex flex-wrap items-end justify-between gap-4 rounded-[var(--radius)] bg-[var(--surface)] px-3 py-[11px];
   box-shadow: var(--shadow-surface);
   transition: box-shadow 150ms ease-out;
 }
@@ -287,6 +287,19 @@ main {
 
 .field {
   @apply grid min-w-60 gap-1.5;
+}
+
+.field--sort {
+  @apply min-w-[238px];
+}
+
+.toolbar__filters,
+.toolbar__toggles {
+  @apply flex flex-wrap items-end gap-3;
+}
+
+.toolbar__toggles {
+  @apply items-center justify-end gap-x-4 gap-y-1;
 }
 
 .field span,
@@ -475,11 +488,15 @@ tbody tr:last-child td {
 }
 
 .pagination {
-  @apply mt-2.5 flex items-center justify-end gap-2.5 text-[13px] text-[var(--ink-muted)];
+  @apply mt-2.5 flex flex-wrap items-center justify-end gap-2.5 text-[13px] text-[var(--ink-muted)];
 }
 
 .pagination button {
   @apply min-w-21;
+}
+
+.pagination__status {
+  @apply min-w-[174px] text-center;
 }
 
 .notice {
@@ -702,6 +719,20 @@ label {
   .toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .toolbar__filters,
+  .toolbar__toggles {
+    width: 100%;
+  }
+
+  .toolbar__filters {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar__toggles {
+    justify-content: flex-start;
   }
 
   .field {
