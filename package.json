@@ -12,7 +12,8 @@
     "build:css": "npm run build:ui",
     "watch:css": "npm run watch:ui",
     "serve:report": "npm run build:ui && cargo run --bin zfrontier-report-server",
-    "check": "npm run build:ui && npm run check:node && cargo test",
+    "test:node": "node --test",
+    "check": "npm run build:ui && npm run check:node && npm run test:node && cargo test",
     "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check view-engaged-lotteries.js"
   },
   "keywords": [],

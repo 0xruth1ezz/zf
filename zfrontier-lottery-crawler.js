@@ -11,6 +11,7 @@ const {
   getEngagement,
   hasSignIn,
   listAccounts,
+  listEngagements,
   openEngagedStore,
   renderEngagementHtml,
   saveEngagement,
@@ -490,6 +491,68 @@ async function collectPostRequests(page) {
   return CONFIG.maxPosts > 0 ? requests.slice(0, CONFIG.maxPosts) : requests;
 }
 
+function trackedActiveLotteryRequests(records, accountId, now = new Date()) {
+  return records.flatMap((record) => {
+    if (record.accountId !== accountId) return [];
+
+    const drawAt = normalizeChineseDateText(record.drawAt || '');
+    if (!drawAt || isDrawTimeCompleted(drawAt, now)) return [];
+
+    let url;
+    try {
+      url = normalizePostUrl(record.url);
+    } catch {
+      return [];
+    }
+    if (!url) return [];
+
+    return [{
+      url,
+      uniqueKey: postIdFromUrl(url),
+      skipNavigation: true,
+      userData: {
+        label: 'POST',
+        listText: record.title || '',
+        source: 'tracked-active-lottery',
+      },
+    }];
+  });
+}
+
+function loadTrackedActiveLotteryRequests(store, accountId, now = new Date()) {
+  return trackedActiveLotteryRequests(listEngagements(store), accountId, now);
+}
+
+function mergePostRequests(...requestGroups) {
+  const requestsByPostId = new Map();
+
+  for (const requests of requestGroups) {
+    for (const request of requests) {
+      let url;
+      try {
+        url = normalizePostUrl(request.url);
+      } catch {
+        continue;
+      }
+      if (!url) continue;
+
+      const postId = postIdFromUrl(url);
+      requestsByPostId.set(postId, {
+        ...request,
+        url,
+        uniqueKey: postId,
+        skipNavigation: true,
+        userData: {
+          label: 'POST',
+          ...(request.userData || {}),
+        },
+      });
+    }
+  }
+
+  return [...requestsByPostId.values()];
+}
+
 function parsePublishedAtFromText(text, now = new Date()) {
   const normalized = compactText(text);
   const directMatch = normalized.match(/((?:20\d{2})[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}(?:[日号])?(?:\s+\d{1,2}:\d{2})?)/);
@@ -569,14 +632,6 @@ function parseDrawAtFromText(text) {
 function isDrawTimeCompleted(drawAt, now = new Date()) {
   const normalized = normalizeChineseDateText(drawAt);
   return Boolean(normalized && normalized <= dateTimeMinuteKeyForTimeZone(now));
-}
-
-function hasCompletedLotteryText(text) {
-  return /已开奖|开奖已结束|活动已结束|抽奖已结束|抽签已结束|本活动已结束/.test(text || '');
-}
-
-function isLotteryCompleted(bodyText, drawAt) {
-  return isDrawTimeCompleted(drawAt) || hasCompletedLotteryText(bodyText);
 }
 
 function dailyEngagementCountFor(record, dateKey) {
@@ -843,18 +898,20 @@ async function processPost(page, postRequest, engagedStore, account) {
     log.info(`[${account.id}] Backfilled draw time for ${postId}: ${meta.drawAt}.`);
   }
 
-  if (isLotteryCompleted(meta.bodyText, drawAt)) {
-    const reason = drawAt
-      ? `draw time ${drawAt} has passed`
-      : 'page shows the lottery as completed';
-    log.info(`[${account.id}] Skipping ${postId}: ${reason}.`);
-    return;
-  }
-
   const hasLottery = meta.bodyText.includes('抽奖');
 
   if (!hasLottery) {
     log.info(`[${account.id}] Skipping ${postId}: no lottery text found.`);
+    return;
+  }
+
+  if (!drawAt) {
+    log.info(`[${account.id}] Skipping ${postId}: draw time is unknown.`);
+    return;
+  }
+
+  if (isDrawTimeCompleted(drawAt)) {
+    log.info(`[${account.id}] Skipping ${postId}: draw time ${drawAt} has passed.`);
     return;
   }
 
@@ -982,8 +1039,13 @@ async function runAccount(account, engagedStore, accountCount) {
         await performDailySignIn(page, engagedStore, account);
         await navigateTo(page, START_URL, 'Reloading list page after login and daily sign-in');
 
-        const postRequests = await collectPostRequests(page);
-        log.info(`[${account.id}] Processing ${postRequests.length} post pages from the 情报 tab in one browser page.`);
+        const discoveredPostRequests = await collectPostRequests(page);
+        const trackedPostRequests = loadTrackedActiveLotteryRequests(engagedStore, account.id);
+        const postRequests = mergePostRequests(trackedPostRequests, discoveredPostRequests);
+        log.info(
+          `[${account.id}] Processing ${postRequests.length} post pages `
+          + `(${trackedPostRequests.length} tracked active lotteries, ${discoveredPostRequests.length} discovered from the 情报 tab).`,
+        );
 
         for (const postRequest of postRequests) {
           try {
@@ -1008,7 +1070,16 @@ async function runAccount(account, engagedStore, accountCount) {
   }
 }
 
-main().catch((error) => {
-  log.exception(error, 'Crawler failed');
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    log.exception(error, 'Crawler failed');
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  isDrawTimeCompleted,
+  loadTrackedActiveLotteryRequests,
+  mergePostRequests,
+  trackedActiveLotteryRequests,
+};
