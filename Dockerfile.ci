@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
+FROM node:24-bookworm-slim AS ui-builder
+
+WORKDIR /src
+
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+
+COPY uno.config.mjs ui.css ./
+RUN npm run build:css
+
 FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 ARG TARGETARCH
@@ -25,6 +35,7 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 COPY engaged-store.js view-engaged-lotteries.js zfrontier-lottery-crawler.js ./
+COPY --from=ui-builder /src/ui.generated.css ./ui.generated.css
 COPY target/docker/${TARGETARCH}/zfrontier-report-server /usr/local/bin/zfrontier-report-server
 COPY docker/entrypoint.sh /usr/local/bin/zfrontier-entrypoint
 
