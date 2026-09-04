@@ -32,6 +32,8 @@ jobs:
         run: npm ci --ignore-scripts --include=dev
 
       - name: Build SPA
+        env:
+          BUILD_VERSION: ${{ github.sha }}
         run: npm run build:ui
 
       - name: Upload SPA assets
@@ -227,6 +229,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.image_tag }}
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

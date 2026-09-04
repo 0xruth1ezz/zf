@@ -13,11 +13,13 @@ services:
       REPORT_HOST: "0.0.0.0"
       REPORT_PORT: "8787"
       CRAWL_INTERVAL_SECONDS: "3600"
+      PRE_DRAW_RETRY_SECONDS: "60"
       CRAWLER_RUN_TIMEOUT_SECONDS: "1800"
       CRAWLER_RESTART_DELAY_SECONDS: "60"
       CRAWLER_KILL_AFTER_SECONDS: "60"
       RUN_ON_START: "1"
       ZF_DAYS: "7"
+      ZF_PRE_DRAW_ENGAGEMENT_MINUTES: "5"
       ZF_SIGN_IN_TZ: Asia/Shanghai
       TZ: Asia/Shanghai
       ZF_PROFILE_DIR: /data/browser-profile

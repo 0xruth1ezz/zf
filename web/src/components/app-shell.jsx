@@ -61,7 +61,7 @@ export function AppShell({ route, onRefresh, isRefreshing, updatedAt, children }
         </div>
       </aside>
 
-      <div className="min-w-0">
+      <div className="flex min-h-svh min-w-0 flex-col">
         <header className="sticky top-0 z-sticky flex h-14 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur-sm md:h-[72px] md:px-6 lg:px-8">
           <div className="min-w-0">
             <p className="truncate text-xs font-medium text-muted-foreground">
@@ -79,9 +79,12 @@ export function AppShell({ route, onRefresh, isRefreshing, updatedAt, children }
             <span className="hidden sm:inline">{isRefreshing ? 'Refreshing' : 'Refresh'}</span>
           </Button>
         </header>
-        <main id="main-content" className="mx-auto w-full max-w-[1440px] px-4 py-6 md:px-6 md:py-8 lg:px-8">
+        <main id="main-content" className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 md:px-6 md:py-8 lg:px-8">
           {children}
         </main>
+        <footer className="mx-auto flex w-full max-w-[1440px] justify-end border-t border-border px-4 py-4 text-xs text-muted-foreground md:px-6 lg:px-8">
+          <span className="whitespace-nowrap font-mono">Version {__BUILD_VERSION__}</span>
+        </footer>
       </div>
     </div>
   );

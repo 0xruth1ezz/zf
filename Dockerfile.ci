@@ -4,6 +4,9 @@ FROM node:24-bookworm-slim AS ui-builder
 
 WORKDIR /src
 
+ARG BUILD_VERSION=dev
+ENV BUILD_VERSION=${BUILD_VERSION}
+
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --include=dev
 
@@ -23,6 +26,7 @@ ENV NODE_ENV=production \
     REPORT_HOST=0.0.0.0 \
     REPORT_PORT=8787 \
     CRAWL_INTERVAL_SECONDS=3600 \
+    PRE_DRAW_RETRY_SECONDS=60 \
     CRAWLER_RUN_TIMEOUT_SECONDS=1800 \
     CRAWLER_RESTART_DELAY_SECONDS=60 \
     CRAWLER_KILL_AFTER_SECONDS=60 \

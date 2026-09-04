@@ -5,9 +5,14 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  isDailyEngagementLimitBlocking,
+  isPreDrawEngagementDue,
   loadTrackedActiveLotteryRequests,
   mergePostRequests,
+  nextPreDrawDelaySeconds,
+  preDrawLotteryRequests,
   trackedActiveLotteryRequests,
+  wasEngagedInPreDrawWindow,
 } = require('../zfrontier-lottery-crawler');
 const {
   openEngagedStore,
@@ -127,4 +132,57 @@ test('tracked lotteries are processed first and feed metadata wins on duplicates
 
   assert.deepEqual(requests.map((request) => request.uniqueKey), ['active', 'new']);
   assert.equal(requests[0].userData.listText, 'Fresh title');
+});
+
+test('a final engagement becomes due during the five-minute pre-draw window', () => {
+  const record = {
+    accountId: 'primary',
+    postId: 'pre-draw-due',
+    url: 'https://www.zfrontier.com/app/flow/pre-draw-due',
+    drawAt: '2026-06-17 12:05',
+    engagedAt: '2026-06-17T03:45:00.000Z',
+  };
+
+  assert.equal(isPreDrawEngagementDue(record, NOW, 5), true);
+  assert.deepEqual(
+    preDrawLotteryRequests([record], 'primary', NOW).map((request) => request.uniqueKey),
+    ['pre-draw-due'],
+  );
+  assert.equal(isDailyEngagementLimitBlocking({
+    ...record,
+    lastEngagedDate: '2026-06-17',
+    dailyEngagementCount: 2,
+  }, '2026-06-17', record.drawAt, NOW, 2), false);
+  assert.equal(isDailyEngagementLimitBlocking({
+    ...record,
+    lastEngagedDate: '2026-06-17',
+    dailyEngagementCount: 2,
+  }, '2026-06-17', record.drawAt, new Date('2026-06-17T03:59:00.000Z'), 2), true);
+});
+
+test('a successful engagement inside the final window is not scheduled twice', () => {
+  const record = {
+    accountId: 'primary',
+    postId: 'pre-draw-complete',
+    url: 'https://www.zfrontier.com/app/flow/pre-draw-complete',
+    drawAt: '2026-06-17 12:05',
+    engagedAt: '2026-06-17T04:01:00.000Z',
+  };
+
+  assert.equal(wasEngagedInPreDrawWindow(record, record.drawAt, 5), true);
+  assert.equal(isPreDrawEngagementDue(record, NOW, 5), false);
+  assert.equal(nextPreDrawDelaySeconds([record], NOW, 5), null);
+});
+
+test('the scheduler wakes at the beginning of the five-minute pre-draw window', () => {
+  const now = new Date('2026-06-17T04:00:30.000Z'); // 12:00:30 in Asia/Shanghai
+  const records = [{
+    accountId: 'primary',
+    postId: 'scheduled',
+    url: 'https://www.zfrontier.com/app/flow/scheduled',
+    drawAt: '2026-06-17 12:10',
+    engagedAt: '2026-06-17T03:45:00.000Z',
+  }];
+
+  assert.equal(nextPreDrawDelaySeconds(records, now, 5), 270);
 });
