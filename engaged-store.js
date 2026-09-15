@@ -9,6 +9,7 @@ const APP_JS = fs.readFileSync(path.join(__dirname, 'dist/assets/app.js'), 'utf8
 function openEngagedStore(dbPath, htmlPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA busy_timeout = 5000');
   migrateLegacyEngagements(db);
   migrateLegacySignIns(db);
   db.exec(`
@@ -49,6 +50,23 @@ function openEngagedStore(dbPath, htmlPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_zfrontier_accounts_enabled
       ON zfrontier_accounts (enabled, id);
+
+    CREATE TABLE IF NOT EXISTS private_messages (
+      account_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      preview TEXT NOT NULL,
+      url TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      unread_count INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL,
+      PRIMARY KEY (account_id, message_id)
+    );
+    CREATE TABLE IF NOT EXISTS private_message_sync (
+      account_id TEXT PRIMARY KEY,
+      fetched_at TEXT NOT NULL DEFAULT '',
+      error TEXT NOT NULL DEFAULT ''
+    );
   `);
   addColumnIfMissing(db, 'engaged_lotteries', 'draw_at', "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, 'engaged_lotteries', 'last_engaged_date', "TEXT NOT NULL DEFAULT ''");
@@ -297,14 +315,60 @@ function renderEngagementHtml(store) {
   const lotteryRows = listEngagements(store);
   const signInRows = listSignIns(store);
   const accountRows = listAccounts(store);
-  fs.writeFileSync(store.htmlPath, buildSnapshotHtml(lotteryRows, signInRows, accountRows), 'utf8');
+  const temporaryPath = `${store.htmlPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, buildSnapshotHtml(lotteryRows, signInRows, accountRows, listPrivateMessages(store), listMessageSync(store)), 'utf8');
+  fs.renameSync(temporaryPath, store.htmlPath);
 }
 
-function buildSnapshotHtml(lotteryRows, signInRows, accountRows) {
+function replacePrivateMessages(store, accountId, messages, fetchedAt = new Date().toISOString()) {
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    store.db.prepare('DELETE FROM private_messages WHERE account_id = ?').run(accountId);
+    const insert = store.db.prepare(`
+      INSERT INTO private_messages (account_id, message_id, sender, preview, url, sent_at, unread_count, position)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    messages.forEach((message, position) => insert.run(accountId, message.messageId, message.sender,
+      message.preview, message.url, message.sentAt, message.unreadCount, position));
+    store.db.prepare(`
+      INSERT INTO private_message_sync (account_id, fetched_at, error) VALUES (?, ?, '')
+      ON CONFLICT(account_id) DO UPDATE SET fetched_at = excluded.fetched_at, error = ''
+    `).run(accountId, fetchedAt);
+    store.db.exec('COMMIT');
+  } catch (error) {
+    store.db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function saveMessageSyncError(store, accountId, error) {
+  store.db.prepare(`
+    INSERT INTO private_message_sync (account_id, error) VALUES (?, ?)
+    ON CONFLICT(account_id) DO UPDATE SET error = excluded.error
+  `).run(accountId, error);
+}
+
+function listPrivateMessages(store) {
+  return store.db.prepare(`
+    SELECT account_id AS accountId, message_id AS messageId, sender, preview, url,
+      sent_at AS sentAt, unread_count AS unreadCount
+    FROM private_messages ORDER BY position, account_id
+  `).all();
+}
+
+function listMessageSync(store) {
+  return store.db.prepare(`
+    SELECT account_id AS accountId, fetched_at AS fetchedAt, error FROM private_message_sync ORDER BY account_id
+  `).all();
+}
+
+function buildSnapshotHtml(lotteryRows, signInRows, accountRows, messages, messageSync) {
   const data = JSON.stringify({
     records: lotteryRows,
     signIns: signInRows.map(({ url: _url, ...row }) => row),
     accounts: accountRows.map(({ password: _password, ...account }) => account),
+    messages,
+    messageSync,
     generatedAt: new Date().toISOString(),
     isSnapshot: true,
   }).replace(/</g, '\\u003c');
@@ -801,6 +865,10 @@ function escapeAttr(value) {
 }
 
 module.exports = {
+  listPrivateMessages,
+  listMessageSync,
+  replacePrivateMessages,
+  saveMessageSyncError,
   countEngagements,
   countSignIns,
   getEngagement,

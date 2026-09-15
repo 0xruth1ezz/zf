@@ -5,7 +5,8 @@ import { AppShell } from './components/app-shell';
 import { Button } from './components/ui/button';
 import { ActivityPage } from './pages/activity-page';
 import { AccountsPage } from './pages/accounts-page';
-import { fetchDashboard } from './data';
+import { MessagesPage } from './pages/messages-page';
+import { fetchDashboard, isSnapshotMode } from './data';
 
 function subscribeToRoute(callback) {
   window.addEventListener('hashchange', callback);
@@ -18,7 +19,8 @@ function subscribeToRoute(callback) {
 
 function currentRoute() {
   const route = window.location.hash.slice(1);
-  if (route === 'accounts' || route === 'activity') return route;
+  if (route === 'accounts' || route === 'activity' || route === 'messages') return route;
+  if (window.location.pathname.startsWith('/messages')) return 'messages';
   return window.location.pathname.startsWith('/config') || window.location.pathname.startsWith('/accounts')
     ? 'accounts'
     : 'activity';
@@ -59,10 +61,16 @@ function ErrorState({ error, onRetry }) {
 
 export function App() {
   const route = useRoute();
-  const dashboard = useQuery({ queryKey: ['dashboard'], queryFn: fetchDashboard });
+  const dashboard = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: fetchDashboard,
+    refetchInterval: isSnapshotMode() ? false : 15 * 60 * 1000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+  });
 
   if (dashboard.isPending) return <LoadingState />;
-  if (dashboard.isError) return <ErrorState error={dashboard.error} onRetry={() => dashboard.refetch()} />;
+  if (dashboard.isError && !dashboard.data) return <ErrorState error={dashboard.error} onRetry={() => dashboard.refetch()} />;
 
   return (
     <AppShell
@@ -70,8 +78,12 @@ export function App() {
       onRefresh={() => dashboard.refetch()}
       route={route}
       updatedAt={dashboard.data.generatedAt}
+      unreadCount={(dashboard.data.messages || []).reduce((count, message) => count + message.unreadCount, 0)}
     >
-      {route === 'accounts' ? <AccountsPage data={dashboard.data} /> : <ActivityPage data={dashboard.data} />}
+      {dashboard.isError ? <p role="alert" className="mb-4 text-sm text-destructive">Refresh failed. Showing the last loaded data.</p> : null}
+      {route === 'accounts' ? <AccountsPage data={dashboard.data} />
+        : route === 'messages' ? <MessagesPage data={dashboard.data} />
+          : <ActivityPage data={dashboard.data} />}
     </AppShell>
   );
 }

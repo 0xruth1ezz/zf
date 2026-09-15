@@ -12,6 +12,9 @@ run_crawler_once() {
   crawler_command=(npm start)
   if [ "$run_mode" = "pre-draw" ]; then
     crawler_command+=(-- --tracked-only)
+  elif [ "$run_mode" = "messages" ]; then
+    crawler_command+=(-- --messages-only)
+    timeout_seconds="${MESSAGE_FETCH_TIMEOUT_SECONDS:-840}"
   fi
 
   echo "[crawler] starting ${run_mode} run at $(date -Is)"
@@ -28,6 +31,23 @@ run_crawler_once() {
       return 0
     fi
   fi
+}
+
+message_loop() {
+  local interval="${MESSAGE_FETCH_INTERVAL_SECONDS:-900}"
+  local started elapsed remaining
+  if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[messages] MESSAGE_FETCH_INTERVAL_SECONDS must be a positive integer" >&2
+    return 1
+  fi
+  while true; do
+    started=$SECONDS
+    run_crawler_once messages || true
+    elapsed=$((SECONDS - started))
+    remaining=$((interval - elapsed))
+    if [ "$remaining" -lt 1 ]; then remaining=1; fi
+    sleep "$remaining"
+  done
 }
 
 crawler_loop() {
@@ -71,8 +91,8 @@ crawler_loop() {
 
 cleanup() {
   echo "[entrypoint] shutting down"
-  kill "${crawler_pid:-}" "${server_pid:-}" 2>/dev/null || true
-  wait "${crawler_pid:-}" "${server_pid:-}" 2>/dev/null || true
+  kill "${crawler_pid:-}" "${message_pid:-}" "${server_pid:-}" 2>/dev/null || true
+  wait "${crawler_pid:-}" "${message_pid:-}" "${server_pid:-}" 2>/dev/null || true
 }
 
 trap cleanup INT TERM
@@ -80,10 +100,13 @@ trap cleanup INT TERM
 crawler_loop &
 crawler_pid=$!
 
+message_loop &
+message_pid=$!
+
 zfrontier-report-server &
 server_pid=$!
 
-wait -n "$crawler_pid" "$server_pid"
+wait -n "$crawler_pid" "$message_pid" "$server_pid"
 status=$?
 cleanup
 exit "$status"

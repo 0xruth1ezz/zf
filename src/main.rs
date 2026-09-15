@@ -47,10 +47,32 @@ struct AccountConfig {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PrivateMessage {
+    account_id: String,
+    message_id: String,
+    sender: String,
+    preview: String,
+    url: String,
+    sent_at: String,
+    unread_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageSync {
+    account_id: String,
+    fetched_at: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DashboardPayload {
     records: Vec<Record>,
     sign_ins: Vec<SignInRecord>,
     accounts: Vec<AccountConfig>,
+    messages: Vec<PrivateMessage>,
+    message_sync: Vec<MessageSync>,
     generated_at: String,
     is_snapshot: bool,
 }
@@ -151,6 +173,7 @@ fn handle_client(mut stream: TcpStream, config: &Config) -> std::io::Result<()> 
         | ("GET", "/index.html")
         | ("GET", "/report")
         | ("GET", "/activity")
+        | ("GET", "/messages")
         | ("GET", "/config")
         | ("GET", "/config.html")
         | ("GET", "/accounts") => write_response(
@@ -338,6 +361,23 @@ fn ensure_schema(db_path: &Path) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_zfrontier_accounts_enabled
           ON zfrontier_accounts (enabled, id);
+
+        CREATE TABLE IF NOT EXISTS private_messages (
+          account_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          sender TEXT NOT NULL,
+          preview TEXT NOT NULL,
+          url TEXT NOT NULL,
+          sent_at TEXT NOT NULL,
+          unread_count INTEGER NOT NULL DEFAULT 0,
+          position INTEGER NOT NULL,
+          PRIMARY KEY (account_id, message_id)
+        );
+        CREATE TABLE IF NOT EXISTS private_message_sync (
+          account_id TEXT PRIMARY KEY,
+          fetched_at TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT ''
+        );
         "#,
     )?;
     add_column_if_missing(
@@ -508,6 +548,8 @@ fn load_dashboard(db_path: &Path) -> rusqlite::Result<DashboardPayload> {
         records: load_records(db_path)?,
         sign_ins: load_sign_ins(db_path)?,
         accounts: load_accounts(db_path)?,
+        messages: load_private_messages(db_path)?,
+        message_sync: load_message_sync(db_path)?,
         generated_at: sqlite_now(db_path)?,
         is_snapshot: false,
     })
@@ -533,6 +575,45 @@ fn load_records(db_path: &Path) -> rusqlite::Result<Vec<Record>> {
         })?
         .collect();
     records
+}
+
+fn load_private_messages(db_path: &Path) -> rusqlite::Result<Vec<PrivateMessage>> {
+    let conn = Connection::open(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT account_id, message_id, sender, preview, url, sent_at, unread_count
+         FROM private_messages ORDER BY position, account_id",
+    )?;
+    let messages = stmt
+        .query_map([], |row| {
+            Ok(PrivateMessage {
+                account_id: row.get(0)?,
+                message_id: row.get(1)?,
+                sender: row.get(2)?,
+                preview: row.get(3)?,
+                url: row.get(4)?,
+                sent_at: row.get(5)?,
+                unread_count: row.get(6)?,
+            })
+        })?
+        .collect();
+    messages
+}
+
+fn load_message_sync(db_path: &Path) -> rusqlite::Result<Vec<MessageSync>> {
+    let conn = Connection::open(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT account_id, fetched_at, error FROM private_message_sync ORDER BY account_id",
+    )?;
+    let statuses = stmt
+        .query_map([], |row| {
+            Ok(MessageSync {
+                account_id: row.get(0)?,
+                fetched_at: row.get(1)?,
+                error: row.get(2)?,
+            })
+        })?
+        .collect();
+    statuses
 }
 
 fn load_sign_ins(db_path: &Path) -> rusqlite::Result<Vec<SignInRecord>> {
@@ -867,6 +948,8 @@ mod tests {
             records: Vec::new(),
             sign_ins: Vec::new(),
             accounts: Vec::new(),
+            messages: Vec::new(),
+            message_sync: Vec::new(),
             generated_at: "2026-09-04T00:00:00.000Z".to_string(),
             is_snapshot: false,
         };

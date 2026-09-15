@@ -16,7 +16,9 @@ const {
   renderEngagementHtml,
   saveEngagement,
   saveSignIn,
+  saveMessageSyncError,
 } = require('./engaged-store');
+const { fetchPrivateMessages } = require('./private-messages');
 
 const ROOT_DIR = __dirname;
 dotenv.config({ path: process.env.ENV_FILE || path.join(ROOT_DIR, '.env'), quiet: true });
@@ -45,6 +47,7 @@ const CONFIG = {
   viewportHeight: Math.max(720, numberFromEnv('VIEWPORT_HEIGHT', 1200)),
   dryRun: hasFlag('--dry-run') || process.env.DRY_RUN === '1',
   trackedOnly: hasFlag('--tracked-only'),
+  messagesOnly: hasFlag('--messages-only'),
   headless: hasFlag('--headless') || process.env.HEADLESS === '1',
   useChrome: process.env.USE_CHROME !== '0',
   proxyUrl: process.env.PROXY_URL || '',
@@ -82,6 +85,7 @@ function compactText(text) {
 
 function loadAccounts(store) {
   const storedAccounts = loadStoredAccounts(store);
+  if (listAccounts(store).length > 0 && storedAccounts.length === 0) return [];
   const configuredAccounts = storedAccounts.length > 0
     ? storedAccounts
     : loadNumberedAccounts();
@@ -1086,6 +1090,7 @@ async function main() {
       await runAccount(account, engagedStore, accounts.length);
     } catch (error) {
       failedAccounts.push(account.id);
+      if (CONFIG.messagesOnly) saveMessageSyncError(engagedStore, account.id, 'Could not fetch private messages. Check the account login or ZF verification.');
       log.error(`[${account.id}] Account run failed: ${error.message}`);
     }
   }
@@ -1098,7 +1103,7 @@ async function main() {
   log.info(`View records at ${ENGAGED_HTML}.`);
   engagedStore.db.close();
 
-  if (failedAccounts.length === accounts.length) {
+  if (accounts.length > 0 && failedAccounts.length === accounts.length) {
     throw new Error('All configured accounts failed.');
   }
 }
@@ -1129,7 +1134,7 @@ async function processNewlyDuePreDrawLotteries(
 }
 
 async function runAccount(account, engagedStore, accountCount) {
-  const requestQueue = await RequestQueue.open(`zfrontier-${account.id}-${Date.now()}`);
+  const requestQueue = await RequestQueue.open(`zfrontier-${CONFIG.messagesOnly ? 'messages-' : ''}${account.id}-${Date.now()}`);
   await requestQueue.addRequest({
     url: START_URL,
     uniqueKey: `zfrontier-info-list-${account.id}`,
@@ -1138,15 +1143,17 @@ async function runAccount(account, engagedStore, accountCount) {
   });
 
   let listPageFailed = false;
-  const userDataDir = profileDirForAccount(account, accountCount);
+  const userDataDir = CONFIG.messagesOnly
+    ? path.join(PROFILE_DIR, 'private-messages', account.id)
+    : profileDirForAccount(account, accountCount);
   log.info(`[${account.id}] Starting crawler with profile ${userDataDir}.`);
 
   const crawler = new PlaywrightCrawler({
     requestQueue,
     maxConcurrency: 1,
-    maxRequestRetries: 1,
+    maxRequestRetries: CONFIG.messagesOnly ? 0 : 1,
     navigationTimeoutSecs: 60,
-    requestHandlerTimeoutSecs: CONFIG.requestTimeoutSecs,
+    requestHandlerTimeoutSecs: CONFIG.messagesOnly ? 300 : CONFIG.requestTimeoutSecs,
     launchContext: {
       launcher: chromium,
       useChrome: CONFIG.useChrome,
@@ -1169,6 +1176,12 @@ async function runAccount(account, engagedStore, accountCount) {
         await navigateTo(page, START_URL, 'Opening list page');
         await waitForManualCheckpoint(page, 'Opening list page');
         await ensureLoggedIn(page, account, START_URL);
+
+        if (CONFIG.messagesOnly) {
+          const count = await fetchPrivateMessages(page, engagedStore, account.id);
+          log.info(`[${account.id}] Fetched ${count} private message conversations.`);
+          return;
+        }
 
         const trackedPostRequests = CONFIG.trackedOnly
           ? loadPreDrawLotteryRequests(engagedStore, account.id)

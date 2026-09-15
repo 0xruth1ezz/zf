@@ -1,4 +1,4 @@
-import { Activity, RefreshCw, Settings2, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Mail, RefreshCw, Settings2, Wifi, WifiOff } from 'lucide-react';
 import { Link } from 'react-aria-components';
 import { Button } from './ui/button';
 import { buttonVariants } from './ui/button-variants';
@@ -7,10 +7,11 @@ import { formatDateTime, isSnapshotMode } from '../data';
 
 const navigation = [
   { id: 'activity', label: 'Activity', icon: Activity },
+  { id: 'messages', label: 'Messages', icon: Mail },
   { id: 'accounts', label: 'Accounts', icon: Settings2 },
 ];
 
-export function AppShell({ route, onRefresh, isRefreshing, updatedAt, children }) {
+export function AppShell({ route, onRefresh, isRefreshing, updatedAt, unreadCount = 0, children }) {
   const snapshot = isSnapshotMode();
 
   return (
@@ -45,6 +46,11 @@ export function AppShell({ route, onRefresh, isRefreshing, updatedAt, children }
               >
                 <Icon aria-hidden="true" />
                 {item.label}
+                {item.id === 'messages' && unreadCount > 0 ? (
+                  <span aria-label={`${unreadCount} unread messages`} className="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-xs font-semibold tabular-nums text-primary-foreground">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                ) : null}
               </Link>
             );
           })}

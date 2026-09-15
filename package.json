@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node zfrontier-lottery-crawler.js",
     "dry-run": "node zfrontier-lottery-crawler.js --dry-run",
+    "fetch:messages": "node zfrontier-lottery-crawler.js --messages-only",
     "view": "node view-engaged-lotteries.js",
     "build:ui": "vite build",
     "watch:ui": "vite build --watch",
@@ -14,7 +15,7 @@
     "serve:report": "npm run build:ui && cargo run --bin zfrontier-report-server",
     "test:node": "node --test",
     "check": "npm run build:ui && npm run check:node && npm run test:node && cargo test",
-    "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check view-engaged-lotteries.js"
+    "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check private-messages.js && node --check view-engaged-lotteries.js"
   },
   "keywords": [],
   "author": "",
