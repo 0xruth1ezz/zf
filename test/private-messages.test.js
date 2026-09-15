@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  openEngagedStore, replacePrivateMessages, listPrivateMessages, listMessageSync, saveMessageSyncError,
+  openEngagedStore, replacePrivateMessages, listPrivateMessages, listMessageSync, saveMessageSyncError, initializeMessageSync,
 } = require('../engaged-store');
 const { fetchPrivateMessages, MESSAGE_LIST_URL } = require('../private-messages');
 
@@ -19,6 +19,19 @@ function message(id, unreadCount = 1) {
   return { messageId: id, sender: 'Sender', preview: 'Message preview', sentAt: '2026-09-15',
     url: `https://www.zfrontier.com/my/mail/thread/${id}`, unreadCount };
 }
+
+test('all accounts have a status before fetching, without overwriting earlier results', (t) => {
+  const store = createStore(t);
+  replacePrivateMessages(store, 'existing', [message('1')], '2026-09-15T00:00:00Z');
+  saveMessageSyncError(store, 'failed', 'Login expired');
+  initializeMessageSync(store, ['existing', 'failed', 'pending']);
+  initializeMessageSync(store, ['existing', 'failed', 'pending']);
+  assert.deepEqual(listMessageSync(store).map((row) => ({ ...row })), [
+    { accountId: 'existing', fetchedAt: '2026-09-15T00:00:00Z', error: '' },
+    { accountId: 'failed', fetchedAt: '', error: 'Login expired' },
+    { accountId: 'pending', fetchedAt: '', error: '' },
+  ]);
+});
 
 test('refresh replaces only the account inbox, reconciles unread state, and clears old errors', (t) => {
   const store = createStore(t);

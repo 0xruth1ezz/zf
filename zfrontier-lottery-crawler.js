@@ -17,6 +17,7 @@ const {
   saveEngagement,
   saveSignIn,
   saveMessageSyncError,
+  initializeMessageSync,
 } = require('./engaged-store');
 const { fetchPrivateMessages } = require('./private-messages');
 
@@ -1072,8 +1073,9 @@ async function main() {
   log.setLevel(log.LEVELS.INFO);
 
   const engagedStore = openEngagedStore(ENGAGED_DB, ENGAGED_HTML);
-  renderEngagementHtml(engagedStore);
   const accounts = loadAccounts(engagedStore);
+  if (CONFIG.messagesOnly) initializeMessageSync(engagedStore, accounts.map((account) => account.id));
+  renderEngagementHtml(engagedStore);
 
   accounts
     .filter((account) => !account.phone || !account.password)

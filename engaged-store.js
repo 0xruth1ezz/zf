@@ -348,6 +348,11 @@ function saveMessageSyncError(store, accountId, error) {
   `).run(accountId, error);
 }
 
+function initializeMessageSync(store, accountIds) {
+  const insert = store.db.prepare('INSERT OR IGNORE INTO private_message_sync (account_id) VALUES (?)');
+  accountIds.forEach((accountId) => insert.run(accountId));
+}
+
 function listPrivateMessages(store) {
   return store.db.prepare(`
     SELECT account_id AS accountId, message_id AS messageId, sender, preview, url,
@@ -865,6 +870,7 @@ function escapeAttr(value) {
 }
 
 module.exports = {
+  initializeMessageSync,
   listPrivateMessages,
   listMessageSync,
   replacePrivateMessages,

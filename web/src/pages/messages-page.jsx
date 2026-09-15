@@ -11,7 +11,17 @@ const PAGE_SIZE = 20;
 export function MessagesPage({ data }) {
   const [page, setPage] = useState(0);
   const messages = data.messages || [];
-  const sync = data.messageSync || [];
+  const syncByAccount = new Map((data.messageSync || []).map((status) => [status.accountId, status]));
+  for (const account of data.accounts || []) {
+    syncByAccount.set(account.id, {
+      accountId: account.id,
+      fetchedAt: '',
+      error: '',
+      ...syncByAccount.get(account.id),
+      enabled: account.enabled,
+    });
+  }
+  const sync = [...syncByAccount.values()].sort((left, right) => left.accountId.localeCompare(right.accountId));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(messages.length / PAGE_SIZE) - 1));
   const rows = messages.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
@@ -24,7 +34,9 @@ export function MessagesPage({ data }) {
             <p key={status.accountId} className="flex flex-wrap items-center gap-2">
               <AccountBadge accountId={status.accountId} />
               <span>Last fetched: {formatDateTime(status.fetchedAt)}</span>
-              {status.error ? <span className="text-destructive" role="status">Fetch failed. Retrying on the next check.</span> : null}
+              {status.enabled === false ? <span>Account disabled</span>
+                : status.error ? <span className="text-destructive" role="status">Fetch failed. Retrying on the next check.</span>
+                  : !status.fetchedAt ? <span>Waiting for first fetch</span> : null}
             </p>
           ))}
         </div>
