@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ExternalLink, Mail } from 'lucide-react';
 import { AccountBadge } from '../components/account-badge';
 import { Badge } from '../components/ui/badge';
+import { Select, SelectItem } from '../components/ui/select';
 import { PageHeader } from '../components/page-header';
 import { Pagination } from '../components/pagination';
 import { formatDateTime } from '../data';
@@ -10,6 +11,7 @@ const PAGE_SIZE = 20;
 
 export function MessagesPage({ data }) {
   const [page, setPage] = useState(0);
+  const [account, setAccount] = useState('all');
   const messages = data.messages || [];
   const syncByAccount = new Map((data.messageSync || []).map((status) => [status.accountId, status]));
   for (const account of data.accounts || []) {
@@ -22,15 +24,24 @@ export function MessagesPage({ data }) {
     });
   }
   const sync = [...syncByAccount.values()].sort((left, right) => left.accountId.localeCompare(right.accountId));
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(messages.length / PAGE_SIZE) - 1));
-  const rows = messages.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+  const accountIds = [...new Set([...sync.map((status) => status.accountId), ...messages.map((message) => message.accountId)])].sort();
+  const filteredMessages = messages.filter((message) => account === 'all' || message.accountId === account);
+  const filteredSync = sync.filter((status) => account === 'all' || status.accountId === account);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(filteredMessages.length / PAGE_SIZE) - 1));
+  const rows = filteredMessages.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
   return (
     <>
       <PageHeader title="Private messages" />
-      {sync.length > 0 ? (
+      <div className="mb-5 w-full sm:w-56">
+        <Select label="Account" selectedKey={account} onSelectionChange={(key) => { setAccount(String(key)); setPage(0); }}>
+          <SelectItem id="all">All accounts</SelectItem>
+          {accountIds.map((id) => <SelectItem key={id} id={id}>{id}</SelectItem>)}
+        </Select>
+      </div>
+      {filteredSync.length > 0 ? (
         <div className="mb-5 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
-          {sync.map((status) => (
+          {filteredSync.map((status) => (
             <p key={status.accountId} className="flex flex-wrap items-center gap-2">
               <AccountBadge accountId={status.accountId} />
               <span>Last fetched: {formatDateTime(status.fetchedAt)}</span>
@@ -41,11 +52,11 @@ export function MessagesPage({ data }) {
           ))}
         </div>
       ) : null}
-      {messages.length === 0 ? (
+      {filteredMessages.length === 0 ? (
         <div className="grid min-h-52 place-items-center border-y border-border py-10 text-center">
           <div>
             <Mail aria-hidden="true" className="mx-auto size-6 text-muted-foreground" />
-            <h2 className="mt-3 text-sm font-semibold">{sync.some((status) => status.fetchedAt) ? 'No private messages' : 'Waiting for the first message fetch'}</h2>
+            <h2 className="mt-3 text-sm font-semibold">{filteredSync.some((status) => status.fetchedAt) ? 'No private messages' : 'Waiting for the first message fetch'}</h2>
           </div>
         </div>
       ) : (
@@ -69,7 +80,7 @@ export function MessagesPage({ data }) {
               </li>
             ))}
           </ul>
-          <Pagination label="Private messages" page={currentPage} onPageChange={setPage} pageSize={PAGE_SIZE} total={messages.length} />
+          <Pagination label="Private messages" page={currentPage} onPageChange={setPage} pageSize={PAGE_SIZE} total={filteredMessages.length} />
         </>
       )}
     </>

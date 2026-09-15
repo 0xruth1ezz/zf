@@ -11,18 +11,26 @@ function readMessageList(document = globalThis.document) {
     const url = new URL(link.getAttribute('href'), 'https://www.zfrontier.com');
     const match = url.pathname.match(/^\/(?:app\/)?my\/mail\/thread\/([A-Za-z0-9_-]+)\/?$/);
     if (url.origin !== 'https://www.zfrontier.com' || !match) continue;
+    if (messages.has(match[1])) continue;
     const row = link.closest('li, tr, .mail-item, .message-item, .mail-thread') || link;
+    if (row === link && !compact(link.textContent)) continue;
     const sender = compact(row.querySelector('.nickname, .user-name, .username, .sender')?.textContent
       || row.querySelector('a[href*="/user/"]')?.textContent
       || row.querySelector('img[alt]')?.getAttribute('alt'));
-    const preview = compact(row.querySelector('.mail-content, .message-content, .content, .summary')?.textContent
-      || link.textContent);
+    // ZF's nested links are repaired by the browser into several anchors per row.
+    const latestMessage = row.querySelector('.text-part .row1')?.cloneNode(true);
+    latestMessage?.querySelectorAll('.nickname, .user-verify-badge, .unread-count, .red-dot').forEach((element) => element.remove());
+    const preview = latestMessage
+      ? compact(latestMessage.textContent).replace(/^[:：]\s*/, '')
+      : compact(row.querySelector('.mail-content, .message-content, .content, .summary')?.textContent || link.textContent);
     const unread = row.querySelector('[data-unread-count], .unread-count, .badge, .red-dot, .unread')
       || (row.matches('.unread, [data-unread="1"], [data-unread="true"]') ? row : null);
     const countText = unread?.getAttribute('data-unread-count') ?? unread?.textContent;
     const count = Number(compact(countText));
     const unreadCount = unread ? (Number.isSafeInteger(count) && count >= 0 && compact(countText) !== '' ? count : 1) : 0;
     const time = row.querySelector('time, .time, .date, .created-at');
+    const metadata = row.querySelector('.text-part .row2')?.cloneNode(true);
+    metadata?.querySelectorAll('.text-bt').forEach((element) => element.remove());
     url.hash = '';
     url.search = '';
     messages.set(match[1], {
@@ -30,7 +38,7 @@ function readMessageList(document = globalThis.document) {
       sender: sender || `User ${match[1]}`,
       preview,
       url: url.href,
-      sentAt: compact(time?.getAttribute('datetime') || time?.textContent),
+      sentAt: compact(time?.getAttribute('datetime') || time?.textContent || metadata?.textContent),
       unreadCount,
     });
   }
