@@ -228,15 +228,32 @@ input {
   min-width: 2.75rem;
   justify-content: center;
   font-weight: 700;
-  border-color: oklch(0.62 0.08 var(--account-hue));
-  background: oklch(0.95 0.035 var(--account-hue));
-  color: oklch(0.35 0.09 var(--account-hue));
+  border-color: oklch(0.45 0.14 var(--account-hue, 245));
+  background: oklch(0.45 0.14 var(--account-hue, 245));
+  color: var(--primary-foreground);
 }
 
-.dark .code-label[data-kind="account"] {
-  border-color: oklch(0.57 0.07 var(--account-hue));
-  background: oklch(0.24 0.035 var(--account-hue));
-  color: oklch(0.86 0.075 var(--account-hue));
+.code-label[data-kind="account"][data-tone="0"] {
+  border-color: var(--chart-1);
+  background: var(--chart-1);
+  color: var(--background);
+}
+
+.code-label[data-kind="account"][data-tone="1"] {
+  border-color: var(--chart-2);
+  background: var(--chart-2);
+  color: var(--primary-foreground);
+}
+
+.code-label[data-kind="account"][data-tone="2"] {
+  border-color: var(--chart-3);
+  background: var(--chart-3);
+  color: var(--accent-foreground);
+}
+
+.dark .code-label[data-kind="account"][data-tone="1"] {
+  border-color: color-mix(in srgb, var(--chart-2), black 10%);
+  background: color-mix(in srgb, var(--chart-2), black 10%);
 }
 
 .code-label[data-kind="date"] {

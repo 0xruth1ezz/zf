@@ -13,9 +13,17 @@ export function AccountColorProvider({ data, children }) {
       ...(data.messages || []), ...(data.messageSync || []),
     ].map((row) => row.accountId).filter(Boolean))].sort();
     const ids = [...new Set([...accounts.map((account) => account.id), ...historicalIds])];
-    // A golden-angle step spreads new accounts around the color wheel without
-    // cycling back to the same three colors.
-    return new Map(ids.map((id, index) => [id, (245 + index * 137.508) % 360]));
+    const assigned = new Map();
+    const used = new Set();
+    for (const id of ids) {
+      // Keep each account's original black/red/yellow preference when available.
+      const preferred = Array.from(id).reduce((sum, character) => sum + character.codePointAt(0), 0) % 3;
+      const tone = [preferred, (preferred + 1) % 3, (preferred + 2) % 3]
+        .find((candidate) => !used.has(candidate)) ?? assigned.size;
+      assigned.set(id, tone);
+      used.add(tone);
+    }
+    return assigned;
   }, [data]);
 
   return <AccountColors value={colors}>{children}</AccountColors>;
@@ -23,11 +31,13 @@ export function AccountColorProvider({ data, children }) {
 
 export function AccountBadge({ accountId, className }) {
   const colors = useContext(AccountColors);
+  const tone = colors.get(accountId) ?? 0;
   return (
     <code
       className={cn('code-label', className)}
       data-kind="account"
-      style={{ '--account-hue': colors.get(accountId) ?? 245 }}
+      data-tone={tone}
+      style={tone < 3 ? undefined : { '--account-hue': (245 + (tone - 3) * 137.508) % 360 }}
     >
       {accountId}
     </code>
