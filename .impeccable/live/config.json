@@ -1,9 +1,0 @@
-{
-  "files": [
-    "engaged-lotteries.html",
-    "data/engaged-lotteries.html"
-  ],
-  "insertBefore": "</body>",
-  "commentSyntax": "html",
-  "cspChecked": true
-}
