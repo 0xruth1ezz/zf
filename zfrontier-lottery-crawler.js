@@ -53,6 +53,8 @@ const CONFIG = {
 
 const LOTTERY_TEXT = '点击抽奖';
 const RUSH_TEXT = '一键冲冲冲';
+const LOTTERY_PREPARE_SECONDS = 30;
+const LOTTERY_LATE_SECONDS = 15;
 const PUBLISH_WINDOW_MS = CONFIG.publishWindowDays * 24 * 60 * 60 * 1000;
 
 function numberFromEnv(name, fallback) {
@@ -225,28 +227,39 @@ function wasEngagedInHour(record, hourStart) {
   return engagedSecond >= hourStart && engagedSecond < hourStart + 3600;
 }
 
-function nextHourlyEngagementSecond(record, now = new Date(), random = Math.random) {
+function nextHourlyEngagementSecond(record, now = new Date(), random = Math.random, reserved = new Set()) {
   const drawMinute = dateTimeMinuteValue(record.drawAt);
   if (drawMinute === null) return null;
   const drawSecond = drawMinute * 60;
   const nowSecond = secondValueForTimeZone(now);
   const today = Math.floor(nowSecond / 86400) * 86400;
 
-  // Only the current and next local day are needed. Missed hours are never replayed.
   for (let day = today; day <= today + 86400; day += 86400) {
     for (let hour = 7; hour < 24; hour += 1) {
       const hourStart = day + hour * 3600;
       const start = hourStart + (hour === 7 ? 1800 : 0);
       const end = Math.min(hourStart + 3600, drawSecond);
-      const earliest = Math.max(start, Math.ceil(nowSecond));
-      if (earliest >= end || wasEngagedInHour(record, hourStart)) continue;
+      if (nowSecond >= end || wasEngagedInHour(record, hourStart)) continue;
 
-      // Keep an existing random time across polling and process restarts, including
-      // overdue work within its hour. A later hour receives a fresh random time.
-      if (record.scheduledSecond >= start && record.scheduledSecond < end) {
+      // Preserve a plan across restarts only while it can still run on time.
+      // Overdue posts get a new future time instead of forming a catch-up batch.
+      if (record.scheduledSecond >= start && record.scheduledSecond < end
+        && nowSecond <= record.scheduledSecond + LOTTERY_LATE_SECONDS
+        && !reserved.has(record.scheduledSecond)) {
         return record.scheduledSecond;
       }
-      return earliest + Math.floor(random() * (end - earliest));
+      const earliest = Math.max(start, Math.ceil(nowSecond) + LOTTERY_PREPARE_SECONDS);
+      if (earliest >= end) continue;
+      const occupied = [...reserved].filter((second) => second >= earliest && second < end)
+        .sort((left, right) => left - right);
+      const available = end - earliest - occupied.length;
+      if (available <= 0) continue;
+      let selected = earliest + Math.floor(random() * available);
+      for (const second of occupied) {
+        if (second > selected) break;
+        selected += 1;
+      }
+      return selected;
     }
   }
   return null;
@@ -260,35 +273,69 @@ function isHourlyEngagementDue(record, now = new Date()) {
   const drawMinute = dateTimeMinuteValue(record.drawAt);
   return record.scheduledSecond >= dayStart + 7.5 * 3600
     && nowSecond >= record.scheduledSecond
+    && nowSecond <= record.scheduledSecond + LOTTERY_LATE_SECONDS
     && nowSecond < hourStart + 3600
     && drawMinute !== null && nowSecond < drawMinute * 60
     && !wasEngagedInHour(record, hourStart);
 }
 
 function ensureLotterySchedule(store, record, now = new Date(), random = Math.random) {
-  const existing = getLotterySchedule(store, record.accountId, record.postId);
-  const engagement = getEngagement(store, record.accountId, record.postId);
-  const schedule = { ...engagement, ...existing, ...record };
-  schedule.scheduledSecond = nextHourlyEngagementSecond(schedule, now, random);
-  if (!existing || ['title', 'url', 'drawAt', 'scheduledSecond']
-    .some((key) => existing[key] !== schedule[key])) {
-    saveLotterySchedule(store, schedule);
+  // Discovery and the lottery worker share the database. Allocate distinct
+  // seconds atomically, and always read fresh engagement and schedule state.
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    const existing = getLotterySchedule(store, record.accountId, record.postId);
+    const engagement = getEngagement(store, record.accountId, record.postId);
+    const schedule = { ...engagement, ...existing, ...record,
+      engagedAt: engagement?.engagedAt, scheduledSecond: existing?.scheduledSecond };
+    const reserved = new Set(store.db.prepare(`
+      SELECT scheduled_second FROM lottery_schedules
+      WHERE scheduled_second IS NOT NULL AND NOT (account_id = ? AND post_id = ?)
+    `).all(record.accountId, record.postId).map((row) => row.scheduled_second));
+    schedule.scheduledSecond = nextHourlyEngagementSecond(schedule, now, random, reserved);
+    if (!existing || ['title', 'url', 'drawAt', 'scheduledSecond']
+      .some((key) => existing[key] !== schedule[key])) {
+      saveLotterySchedule(store, schedule);
+    }
+    store.db.exec('COMMIT');
+    return schedule;
+  } catch (error) {
+    store.db.exec('ROLLBACK');
+    throw error;
   }
-  return schedule;
 }
 
 function refreshLotterySchedules(store, now = new Date()) {
+  const nowMinute = minuteValueForTimeZone(now);
   return listTrackedLotteries(store)
     .filter((record) => dateTimeMinuteValue(record.drawAt) !== null)
-    .map((record) => ensureLotterySchedule(store, record, now));
+    .map((record) => dateTimeMinuteValue(record.drawAt) <= nowMinute && record.scheduledSecond == null
+      ? { ...record, scheduledSecond: null }
+      : ensureLotterySchedule(store, { accountId: record.accountId, postId: record.postId }, now));
+}
+
+function rescheduleLotteryRequest(store, accountId, request, now = new Date()) {
+  const postId = request.uniqueKey;
+  const result = store.db.prepare(`
+    UPDATE lottery_schedules SET scheduled_second = NULL
+    WHERE account_id = ? AND post_id = ? AND scheduled_second = ?
+  `).run(accountId, postId, request.userData.scheduledSecond);
+  if (result.changes) ensureLotterySchedule(store, { accountId, postId }, now);
 }
 
 function nextHourlyDelaySeconds(records, now = new Date()) {
   const nowSecond = secondValueForTimeZone(now);
   const delays = records
     .filter((record) => Number.isFinite(record.scheduledSecond))
-    .map((record) => Math.max(0, Math.ceil(record.scheduledSecond - nowSecond)));
+    .map((record) => Math.max(0, Math.ceil(record.scheduledSecond - nowSecond - LOTTERY_PREPARE_SECONDS)));
   return delays.length ? Math.min(...delays) : null;
+}
+
+async function waitForLotteryTime(page, scheduledSecond) {
+  let remaining;
+  while ((remaining = scheduledSecond - secondValueForTimeZone(new Date())) > 0) {
+    await page.waitForTimeout(Math.min(remaining * 1000, 1000));
+  }
 }
 
 async function isVisible(locator, timeout = 500) {
@@ -643,15 +690,20 @@ function loadTrackedActiveLotteryRequests(store, accountId, now = new Date()) {
   return trackedActiveLotteryRequests(listTrackedLotteries(store), accountId, now);
 }
 
-function loadHourlyLotteryRequests(store, accountId, now = new Date()) {
+function nextHourlyLotteryRequest(store, accountIds, now = new Date()) {
   const records = refreshLotterySchedules(store, now)
-    .filter((record) => record.accountId === accountId && isHourlyEngagementDue(record, now))
+    .filter((record) => accountIds.has(record.accountId) && Number.isFinite(record.scheduledSecond))
     .sort((left, right) => left.scheduledSecond - right.scheduledSecond);
-  return records.flatMap((record) => trackedActiveLotteryRequests([record], accountId, now)
-    .map((request) => ({
+  for (const record of records) {
+    if (nextHourlyDelaySeconds([record], now) > 0) return null;
+    const [request] = trackedActiveLotteryRequests([record], record.accountId, now);
+    if (!request) continue;
+    return { accountId: record.accountId, request: {
       ...request,
-      userData: { ...request.userData, hourlySlot: Math.floor(record.scheduledSecond / 3600) },
-    })));
+      userData: { ...request.userData, scheduledSecond: record.scheduledSecond },
+    } };
+  }
+  return null;
 }
 
 function mergePostRequests(...requestGroups) {
@@ -771,16 +823,12 @@ function dailyEngagementCountFor(record, dateKey) {
 }
 
 function saveExistingEngagementMetadata(store, existingEngagement, updates) {
-  saveEngagement(store, {
-    accountId: existingEngagement.accountId,
-    postId: existingEngagement.postId,
-    url: existingEngagement.url || updates.url,
-    title: existingEngagement.title || updates.title || updates.url,
-    drawAt: updates.drawAt || existingEngagement.drawAt || '',
-    lastEngagedDate: existingEngagement.lastEngagedDate || '',
-    dailyEngagementCount: Number(existingEngagement.dailyEngagementCount) || 1,
-    engagedAt: existingEngagement.engagedAt,
-  });
+  // Discovery must not overwrite an engagement concurrently saved by the worker.
+  store.db.prepare(`
+    UPDATE engaged_lotteries SET title = ?, url = ?, draw_at = ?
+    WHERE account_id = ? AND post_id = ?
+  `).run(updates.title || existingEngagement.title, updates.url || existingEngagement.url,
+    updates.drawAt || existingEngagement.drawAt, existingEngagement.accountId, existingEngagement.postId);
 }
 
 async function extractPostMeta(page, request) {
@@ -1065,10 +1113,20 @@ async function processPost(page, postRequest, engagedStore, account) {
   const schedule = ensureLotterySchedule(engagedStore, {
     accountId: account.id, postId, url: postUrl, title: meta.title, drawAt,
   });
-  const canEngage = () => isHourlyEngagementDue({
-    ...schedule,
-    engagedAt: getEngagement(engagedStore, account.id, postId)?.engagedAt,
-  });
+  const scheduledSecond = postRequest.userData.scheduledSecond;
+  if (!Number.isFinite(scheduledSecond) || schedule.scheduledSecond !== scheduledSecond) {
+    log.info(`[${account.id}] Scheduled ${postId} for ${schedule.scheduledSecond === null ? 'no remaining slot' : new Date(schedule.scheduledSecond * 1000).toISOString().replace('T', ' ').replace('.000Z', '') + ' ' + CONFIG.signInTimeZone}.`);
+    return;
+  }
+  log.info(`[${account.id}] ${postId}: waiting for its scheduled time ${new Date(scheduledSecond * 1000).toISOString().slice(0, 19)} ${CONFIG.signInTimeZone}.`);
+  await waitForLotteryTime(page, scheduledSecond);
+  const canEngage = () => {
+    const current = getLotterySchedule(engagedStore, account.id, postId);
+    return current?.scheduledSecond === scheduledSecond && isHourlyEngagementDue({
+      ...current,
+      engagedAt: getEngagement(engagedStore, account.id, postId)?.engagedAt,
+    });
+  };
   if (!canEngage()) {
     log.info(`[${account.id}] Skipping ${postId}: waiting for its next random hourly engagement (07:30–24:00 ${CONFIG.signInTimeZone}).`);
     return;
@@ -1102,7 +1160,7 @@ async function processPost(page, postRequest, engagedStore, account) {
     engagedAt,
   });
   renderEngagementHtml(engagedStore);
-  log.info(`[${account.id}] Recorded hourly engagement for lottery post ${postId} (${dailyCount + 1} for ${today}): ${meta.title || postUrl}`);
+  log.info(`[${account.id}] Recorded hourly engagement for lottery post ${postId} (${dailyCount + 1} for ${today}, scheduled ${scheduledSecond}, sent ${engagedAt}): ${meta.title || postUrl}`);
 }
 
 async function main() {
@@ -1122,15 +1180,22 @@ async function main() {
     log.warning('Dry run is enabled. The crawler will not click lottery buttons.');
   }
 
+  const selected = CONFIG.trackedOnly
+    ? nextHourlyLotteryRequest(engagedStore, new Set(accounts.map((account) => account.id)))
+    : null;
+  const accountsToRun = CONFIG.trackedOnly
+    ? accounts.filter((account) => account.id === selected?.accountId)
+    : accounts;
   const failedAccounts = [];
-  for (const account of accounts) {
+  for (const account of accountsToRun) {
     try {
-      if (CONFIG.trackedOnly && loadHourlyLotteryRequests(engagedStore, account.id).length === 0) continue;
-      await runAccount(account, engagedStore, accounts.length);
+      await runAccount(account, engagedStore, accounts.length, selected?.request);
     } catch (error) {
       failedAccounts.push(account.id);
       if (CONFIG.messagesOnly) saveMessageSyncError(engagedStore, account.id, 'Could not fetch private messages. Check the account login or ZF verification.');
       log.error(`[${account.id}] Account run failed: ${error.message}`);
+    } finally {
+      if (selected) rescheduleLotteryRequest(engagedStore, account.id, selected.request);
     }
   }
 
@@ -1142,7 +1207,7 @@ async function main() {
   log.info(`View records at ${ENGAGED_HTML}.`);
   engagedStore.db.close();
 
-  if (accounts.length > 0 && failedAccounts.length === accounts.length) {
+  if (accountsToRun.length > 0 && failedAccounts.length === accountsToRun.length) {
     throw new Error('All configured accounts failed.');
   }
 }
@@ -1157,23 +1222,8 @@ async function processPostRequests(page, postRequests, engagedStore, account) {
   }
 }
 
-async function processNewlyDueHourlyLotteries(
-  page,
-  engagedStore,
-  account,
-  attemptedHourlySlots,
-) {
-  const dueRequests = loadHourlyLotteryRequests(engagedStore, account.id)
-    .filter((request) => !attemptedHourlySlots.has(`${request.uniqueKey}:${request.userData.hourlySlot}`));
-  if (dueRequests.length === 0) return;
-
-  dueRequests.forEach((request) => attemptedHourlySlots.add(`${request.uniqueKey}:${request.userData.hourlySlot}`));
-  log.info(`[${account.id}] Interrupting feed processing for ${dueRequests.length} newly due hourly lotteries.`);
-  await processPostRequests(page, dueRequests, engagedStore, account);
-}
-
-async function runAccount(account, engagedStore, accountCount) {
-  const requestQueue = await RequestQueue.open(`zfrontier-${CONFIG.messagesOnly ? 'messages-' : ''}${account.id}-${Date.now()}`);
+async function runAccount(account, engagedStore, accountCount, scheduledRequest) {
+  const requestQueue = await RequestQueue.open(`zfrontier-${CONFIG.messagesOnly ? 'messages' : scheduledRequest ? 'lottery' : 'discovery'}-${account.id}-${Date.now()}`);
   await requestQueue.addRequest({
     url: START_URL,
     uniqueKey: `zfrontier-info-list-${account.id}`,
@@ -1184,15 +1234,17 @@ async function runAccount(account, engagedStore, accountCount) {
   let listPageFailed = false;
   const userDataDir = CONFIG.messagesOnly
     ? path.join(PROFILE_DIR, 'private-messages', account.id)
-    : profileDirForAccount(account, accountCount);
+    : scheduledRequest ? profileDirForAccount(account, accountCount)
+      : path.join(PROFILE_DIR, 'discovery', account.id);
   log.info(`[${account.id}] Starting crawler with profile ${userDataDir}.`);
 
   const crawler = new PlaywrightCrawler({
     requestQueue,
     maxConcurrency: 1,
-    maxRequestRetries: CONFIG.messagesOnly ? 0 : 1,
+    maxRequestRetries: CONFIG.messagesOnly || scheduledRequest ? 0 : 1,
     navigationTimeoutSecs: 60,
-    requestHandlerTimeoutSecs: CONFIG.messagesOnly ? 300 : CONFIG.requestTimeoutSecs,
+    // A blocked single-post attempt must release the worker for other timers.
+    requestHandlerTimeoutSecs: CONFIG.messagesOnly ? 300 : scheduledRequest ? 60 : CONFIG.requestTimeoutSecs,
     launchContext: {
       launcher: chromium,
       useChrome: CONFIG.useChrome,
@@ -1219,6 +1271,10 @@ async function runAccount(account, engagedStore, accountCount) {
     ],
     requestHandler: async ({ page, request }) => {
       if (request.userData.label === 'LIST') {
+        if (scheduledRequest) {
+          await processPost(page, scheduledRequest, engagedStore, account);
+          return;
+        }
         await navigateTo(page, START_URL, 'Opening list page');
         await waitForManualCheckpoint(page, 'Opening list page');
         await ensureLoggedIn(page, account, START_URL);
@@ -1229,38 +1285,12 @@ async function runAccount(account, engagedStore, accountCount) {
           return;
         }
 
-        const trackedPostRequests = loadHourlyLotteryRequests(engagedStore, account.id);
-        const attemptedHourlySlots = new Set(trackedPostRequests
-          .map((request) => `${request.uniqueKey}:${request.userData.hourlySlot}`));
-        log.info(`[${account.id}] Processing ${trackedPostRequests.length} due hourly lotteries first.`);
-        await processPostRequests(page, trackedPostRequests, engagedStore, account);
-
-        if (CONFIG.trackedOnly) {
-          return;
-        }
-
         await performDailySignIn(page, engagedStore, account);
         await navigateTo(page, START_URL, 'Reloading list page before feed discovery');
 
-        const trackedPostIds = new Set(trackedPostRequests.map((postRequest) => postRequest.uniqueKey));
-        const discoveredPostRequests = mergePostRequests(await collectPostRequests(page))
-          .filter((postRequest) => !trackedPostIds.has(postRequest.uniqueKey));
-        log.info(`[${account.id}] Processing ${discoveredPostRequests.length} additional post pages discovered from the 情报 tab.`);
-        await processNewlyDueHourlyLotteries(
-          page,
-          engagedStore,
-          account,
-          attemptedHourlySlots,
-        );
-        for (const postRequest of discoveredPostRequests) {
-          await processNewlyDueHourlyLotteries(
-            page,
-            engagedStore,
-            account,
-            attemptedHourlySlots,
-          );
-          await processPostRequests(page, [postRequest], engagedStore, account);
-        }
+        const discoveredPostRequests = mergePostRequests(await collectPostRequests(page));
+        log.info(`[${account.id}] Discovering lottery schedules from ${discoveredPostRequests.length} post pages.`);
+        await processPostRequests(page, discoveredPostRequests, engagedStore, account);
       }
     },
     failedRequestHandler: async ({ request }, error) => {
@@ -1312,12 +1342,14 @@ module.exports = {
   ensureLotterySchedule,
   isDrawTimeCompleted,
   isHourlyEngagementDue,
-  loadHourlyLotteryRequests,
+  nextHourlyLotteryRequest,
   loadTrackedActiveLotteryRequests,
   mergePostRequests,
   nextHourlyDelaySeconds,
   nextHourlyEngagementSecond,
   processPost,
   refreshLotterySchedules,
+  rescheduleLotteryRequest,
+  saveExistingEngagementMetadata,
   trackedActiveLotteryRequests,
 };

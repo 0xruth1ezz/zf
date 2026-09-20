@@ -51,53 +51,49 @@ message_loop() {
 }
 
 crawler_loop() {
-  interval="${CRAWL_INTERVAL_SECONDS:-3600}"
-  restart_delay="${CRAWLER_RESTART_DELAY_SECONDS:-60}"
-  hourly_retry="${HOURLY_RETRY_SECONDS:-60}"
-  last_status=0
-  last_mode="full"
-  next_full_run=$((SECONDS + interval))
-
-  if [ "${RUN_ON_START:-1}" = "1" ]; then
-    run_crawler_once "$last_mode" || last_status=$?
-  fi
-
+  local interval="${CRAWL_INTERVAL_SECONDS:-3600}"
+  local restart_delay="${CRAWLER_RESTART_DELAY_SECONDS:-60}"
+  local started remaining status
+  if [ "${RUN_ON_START:-1}" != "1" ]; then sleep "$interval"; fi
   while true; do
-    if [ "$last_status" -eq 75 ]; then
-      sleep_seconds="$restart_delay"
-      next_mode="$last_mode"
-      echo "[crawler] restarting ${next_mode} run after timeout in ${sleep_seconds}s"
+    started=$SECONDS
+    status=0
+    run_crawler_once full || status=$?
+    remaining=$((interval - (SECONDS - started)))
+    if [ "$status" -eq 75 ]; then remaining="$restart_delay"; fi
+    if [ "$remaining" -lt 1 ]; then remaining=1; fi
+    sleep "$remaining"
+  done
+}
+
+lottery_loop() {
+  local poll_seconds="${LOTTERY_POLL_SECONDS:-5}"
+  local retry_seconds="${HOURLY_RETRY_SECONDS:-60}"
+  local delay sleep_seconds
+  if ! [[ "$poll_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[lottery] LOTTERY_POLL_SECONDS must be a positive integer" >&2
+    return 1
+  fi
+  while true; do
+    if ! delay="$(node zfrontier-lottery-crawler.js --next-hourly-delay)"; then
+      sleep "$retry_seconds"
+    elif [[ "$delay" =~ ^[0-9]+$ ]] && [ "$delay" -eq 0 ]; then
+      # Each worker invocation selects just one post and waits for its own time.
+      run_crawler_once hourly || sleep "$retry_seconds"
     else
-      sleep_seconds=$((next_full_run - SECONDS))
-      if [ "$sleep_seconds" -lt 0 ]; then sleep_seconds=0; fi
-      next_mode="full"
-      if hourly_delay="$(node zfrontier-lottery-crawler.js --next-hourly-delay)"; then
-        if [[ "$hourly_delay" =~ ^[0-9]+$ ]] && [ "$hourly_delay" -lt "$sleep_seconds" ]; then
-          next_mode="hourly"
-          sleep_seconds="$hourly_delay"
-          if [ "$sleep_seconds" -eq 0 ] && [ "$last_mode" = "hourly" ]; then
-            sleep_seconds="$hourly_retry"
-          fi
-        fi
-      else
-        echo "[crawler] could not calculate the next hourly run; using the regular interval" >&2
+      sleep_seconds="$poll_seconds"
+      if [[ "$delay" =~ ^[0-9]+$ ]] && [ "$delay" -lt "$sleep_seconds" ]; then
+        sleep_seconds="$delay"
       fi
-      echo "[crawler] next ${next_mode} run in ${sleep_seconds}s"
+      sleep "$sleep_seconds"
     fi
-    sleep "${sleep_seconds}"
-    last_status=0
-    last_mode="$next_mode"
-    if [ "$last_mode" = "full" ]; then
-      next_full_run=$((SECONDS + interval))
-    fi
-    run_crawler_once "$last_mode" || last_status=$?
   done
 }
 
 cleanup() {
   echo "[entrypoint] shutting down"
-  kill "${crawler_pid:-}" "${message_pid:-}" "${server_pid:-}" 2>/dev/null || true
-  wait "${crawler_pid:-}" "${message_pid:-}" "${server_pid:-}" 2>/dev/null || true
+  kill "${crawler_pid:-}" "${message_pid:-}" "${lottery_pid:-}" "${server_pid:-}" 2>/dev/null || true
+  wait "${crawler_pid:-}" "${message_pid:-}" "${lottery_pid:-}" "${server_pid:-}" 2>/dev/null || true
 }
 
 trap cleanup INT TERM
@@ -108,10 +104,13 @@ crawler_pid=$!
 message_loop &
 message_pid=$!
 
+lottery_loop &
+lottery_pid=$!
+
 zfrontier-report-server &
 server_pid=$!
 
-wait -n "$crawler_pid" "$message_pid" "$server_pid"
+wait -n "$crawler_pid" "$message_pid" "$lottery_pid" "$server_pid"
 status=$?
 cleanup
 exit "$status"
