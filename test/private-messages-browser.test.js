@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { readMessageList } = require('../private-messages');
+const { readMessageList, fetchPrivateMessages } = require('../private-messages');
+const { openEngagedStore, saveMessageSyncError, listMessageSync } = require('../engaged-store');
 
 async function openMessages(page, data) {
   await page.route('https://zf.test/**', async (route) => {
@@ -32,11 +34,11 @@ test('message account switcher includes pending accounts, filters previews and s
     accounts: [{ id: '150', enabled: true }, { id: '191', enabled: true }, { id: 'empty', enabled: true }],
     messageSync: [{ accountId: '150', fetchedAt: '', error: 'Login failed' }],
   });
-  await page.getByText('Waiting for first fetch', { exact: true }).first().waitFor();
+  await page.getByText('First check pending', { exact: true }).first().waitFor();
   const content = await page.locator('main').innerText();
   assert.match(content, /150/);
   assert.match(content, /191/);
-  assert.match(content, /Fetch failed/);
+  assert.match(content, /Could not check inbox/);
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
   await page.getByRole('button', { name: 'Account' }).click();
   await page.getByRole('option', { name: '191', exact: true }).click();
@@ -45,10 +47,10 @@ test('message account switcher includes pending accounts, filters previews and s
   assert.equal(await list.locator('li').count(), 20);
   assert.match(await list.innerText(), /Latest message 21/);
   assert.doesNotMatch(await list.innerText(), /Latest message 0\b/);
-  assert.equal(await page.getByText('Fetch failed. Retrying on the next check.', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('Could not check inbox. Will retry automatically.', { exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Account' }).click();
   await page.getByRole('option', { name: 'empty', exact: true }).click();
-  await page.getByRole('heading', { name: 'Waiting for the first message fetch', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Waiting for inbox checks', exact: true }).waitFor();
   assert.equal(await list.count(), 0);
   await page.getByRole('button', { name: 'Account' }).click();
   await page.getByRole('option', { name: 'All accounts', exact: true }).click();
@@ -103,7 +105,108 @@ test('message search and unread filters compose with account selection and reset
   assert.equal(await search.inputValue(), '');
   assert.equal(await unread.isChecked(), false);
   assert.match(await list.innerText(), /Sender 0\b/);
-  await page.getByText('1 account needs attention', { exact: true }).waitFor();
+  await page.getByText('1 inbox could not be checked', { exact: true }).waitFor();
+});
+
+test('ZF empty inbox completes the fetch and clears the previous error', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zf-empty-inbox-'));
+  const store = openEngagedStore(path.join(dir, 'test.sqlite'), path.join(dir, 'report.html'));
+  t.after(() => { store.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  saveMessageSyncError(store, '189', 'Could not fetch private messages.');
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const visited = [];
+  await page.route('https://www.zfrontier.com/**', async (route) => {
+    visited.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `
+      <h1>私信列表</h1><ul class="mail-user-list">
+        <div class="post-list empty">&lt;(▰˘◡˘▰)&gt; 长官，您没有新私信</div>
+      </ul>` });
+  });
+  assert.equal(await fetchPrivateMessages(page, store, '189'), 0);
+  assert.deepEqual(visited, ['/my/mail/list']);
+  const [status] = listMessageSync(store);
+  assert.ok(status.fetchedAt);
+  assert.equal(status.error, '');
+
+  await openMessages(page, { accounts: [{ id: '189', enabled: true }], messages: [], messageSync: [status] });
+  await page.getByRole('heading', { name: 'No private messages yet', exact: true }).waitFor();
+  const sync = page.getByRole('list', { name: 'Inbox status', exact: true });
+  assert.match(await sync.innerText(), /Last checked:/);
+  assert.match(await sync.innerText(), /No private messages yet/);
+  assert.doesNotMatch(await page.locator('main').innerText(), /could not|failed|pending|No successful check/i);
+});
+
+test('a failed inbox remains distinguishable from a successfully checked empty inbox', async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await openMessages(page, { accounts: [{ id: 'empty', enabled: true }, { id: 'failed', enabled: true }], messages: [],
+    messageSync: [{ accountId: 'empty', fetchedAt: '2026-09-20T03:00:00Z', error: '' },
+      { accountId: 'failed', fetchedAt: '', error: 'Network unavailable' }] });
+  await page.getByRole('heading', { name: 'Some inboxes could not be checked', exact: true }).waitFor();
+  const sync = page.getByRole('list', { name: 'Inbox status', exact: true });
+  assert.match(await sync.locator('li').filter({ has: page.getByText('empty', { exact: true }) }).innerText(), /No private messages yet/);
+  assert.match(await sync.locator('li').filter({ has: page.getByText('failed', { exact: true }) }).innerText(), /Could not check inbox/);
+});
+
+test('account colors stay distinct and readable across filters, pages, and newly added accounts', async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const data = {
+    accounts: ['191', '150', '189', 'ab', 'ba', 'account-with-a-long-name'].map((id, index) => ({
+      id, enabled: true, createdAt: `2026-09-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+    })),
+    messages: [{ accountId: '189', messageId: '1', sender: 'Sender', preview: 'Preview', unreadCount: 0,
+      url: 'https://www.zfrontier.com/my/mail/thread/1' }],
+    messageSync: [],
+  };
+  data.messageSync = data.accounts.map(({ id }) => ({ accountId: id, fetchedAt: '2026-09-20T00:00:00Z', error: '' }));
+  await openMessages(page, data);
+  const colors = () => page.locator('[data-kind="account"]').evaluateAll((badges) => Object.fromEntries(
+    badges.map((badge) => [badge.textContent, getComputedStyle(badge).backgroundColor])));
+  const initial = await colors();
+  assert.equal(new Set(Object.values(initial)).size, data.accounts.length);
+  await page.getByRole('button', { name: 'Account' }).click();
+  await page.getByRole('option', { name: '189', exact: true }).click();
+  assert.equal((await colors())['189'], initial['189']);
+  assert.match(await page.getByRole('list', { name: 'Inbox status', exact: true }).innerText(), /1 conversation/);
+  await page.getByRole('link', { name: 'Accounts', exact: true }).click();
+  await page.getByRole('heading', { name: 'Accounts', exact: true }).waitFor();
+  assert.deepEqual(await colors(), initial);
+  data.accounts.push({ id: '001', enabled: true, createdAt: '2026-09-21T00:00:00Z' });
+  await page.reload();
+  await page.getByText('001', { exact: true }).waitFor();
+  const afterAdding = await colors();
+  for (const [id, color] of Object.entries(initial)) assert.equal(afterAdding[id], color);
+  assert.equal(new Set(Object.values(afterAdding)).size, data.accounts.length);
+
+  for (const dark of [false, true]) {
+    await page.evaluate((enabled) => document.documentElement.classList.toggle('dark', enabled), dark);
+    const contrast = await page.locator('[data-kind="account"]').evaluateAll((badges) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const luminance = (color) => {
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const rgb = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map((value) => {
+          const channel = value / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+      };
+      return badges.map((badge) => {
+        const style = getComputedStyle(badge);
+        const foreground = luminance(style.color);
+        const background = luminance(style.backgroundColor);
+        return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+      });
+    });
+    assert.ok(contrast.every((ratio) => ratio >= 4.5), `${dark ? 'dark' : 'light'} contrast: ${contrast}`);
+  }
 });
 
 test('inbox extraction preserves unread counts and only accepts ZF thread links', async (t) => {

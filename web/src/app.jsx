@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, LoaderCircle, RefreshCw } from 'lucide-react';
 import { AppShell } from './components/app-shell';
+import { AccountColorProvider } from './components/account-badge';
 import { Button } from './components/ui/button';
 import { ActivityPage } from './pages/activity-page';
 import { AccountsPage } from './pages/accounts-page';
@@ -73,17 +74,19 @@ export function App() {
   if (dashboard.isError && !dashboard.data) return <ErrorState error={dashboard.error} onRetry={() => dashboard.refetch()} />;
 
   return (
-    <AppShell
-      isRefreshing={dashboard.isFetching}
-      onRefresh={() => dashboard.refetch()}
-      route={route}
-      updatedAt={dashboard.data.generatedAt}
-      unreadCount={(dashboard.data.messages || []).reduce((count, message) => count + message.unreadCount, 0)}
-    >
-      {dashboard.isError ? <p role="alert" className="mb-4 text-sm text-destructive">Refresh failed. Showing the last loaded data.</p> : null}
-      {route === 'accounts' ? <AccountsPage data={dashboard.data} />
-        : route === 'messages' ? <MessagesPage data={dashboard.data} />
-          : <ActivityPage data={dashboard.data} />}
-    </AppShell>
+    <AccountColorProvider data={dashboard.data}>
+      <AppShell
+        isRefreshing={dashboard.isFetching}
+        onRefresh={() => dashboard.refetch()}
+        route={route}
+        updatedAt={dashboard.data.generatedAt}
+        unreadCount={(dashboard.data.messages || []).reduce((count, message) => count + message.unreadCount, 0)}
+      >
+        {dashboard.isError ? <p role="alert" className="mb-4 text-sm text-destructive">Refresh failed. Showing the last loaded data.</p> : null}
+        {route === 'accounts' ? <AccountsPage data={dashboard.data} />
+          : route === 'messages' ? <MessagesPage data={dashboard.data} />
+            : <ActivityPage data={dashboard.data} />}
+      </AppShell>
+    </AccountColorProvider>
   );
 }

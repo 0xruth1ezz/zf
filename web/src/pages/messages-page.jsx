@@ -16,8 +16,8 @@ function MessageEmptyState({ hasAccounts, hasMessages, search, unreadOnly, sync,
   const hasFilters = Boolean(search || unreadOnly);
   const allDisabled = sync.length > 0 && sync.every((status) => status.enabled === false);
   const hasFetchError = sync.some((status) => status.enabled !== false && status.error);
-  let title = 'No private messages';
-  let description = 'No conversations were found in the last fetch. New messages will appear here after the next check.';
+  let title = 'No private messages yet';
+  let description = 'No conversations were found. New messages will appear here after the next inbox check.';
 
   if (search || (unreadOnly && hasMessages)) {
     title = unreadOnly && !search ? 'No unread messages' : 'No matching conversations';
@@ -28,11 +28,12 @@ function MessageEmptyState({ hasAccounts, hasMessages, search, unreadOnly, sync,
   } else if (allDisabled) {
     title = 'Message fetching is paused';
     description = 'Enable an account to fetch new messages. Saved conversations will remain available here.';
-  } else if (!sync.some((status) => status.fetchedAt)) {
-    title = hasFetchError ? 'Messages could not be fetched' : 'Waiting for the first message fetch';
-    description = hasFetchError
-      ? 'The crawler will retry on the next check. Review the account fetch status below.'
-      : 'Conversations will appear here after the crawler checks this account’s inbox.';
+  } else if (hasFetchError) {
+    title = sync.length === 1 ? 'Could not check this inbox' : 'Some inboxes could not be checked';
+    description = 'Unavailable inboxes will be checked again automatically.';
+  } else if (sync.some((status) => status.enabled !== false && !status.fetchedAt)) {
+    title = 'Waiting for inbox checks';
+    description = 'Conversations will appear here once the enabled accounts have been checked.';
   }
 
   return (
@@ -96,20 +97,23 @@ function MessageSync({ sync }) {
 
   return (
     <section aria-labelledby="message-sync-heading" className="mt-8">
-      <h2 id="message-sync-heading" className="text-sm font-semibold">Account fetch status</h2>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">Message counts reflect the last successful fetch for each account.</p>
-      <ul aria-label="Account fetch status" className="mt-3 divide-y divide-border rounded-lg border border-border bg-card">
+      <h2 id="message-sync-heading" className="text-sm font-semibold">Inbox status</h2>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">Each inbox is checked automatically. An empty inbox needs no action.</p>
+      <ul aria-label="Inbox status" className="mt-3 divide-y divide-border rounded-lg border border-border bg-card">
         {sync.map((status) => (
           <li key={status.accountId} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-3">
             <div className="w-26 min-w-0"><AccountBadge accountId={status.accountId} /></div>
             <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
-              Last fetched: <span className="tabular-nums">{formatDateTime(status.fetchedAt)}</span>
+              {status.fetchedAt
+                ? <>Last checked: <span className="tabular-nums">{formatDateTime(status.fetchedAt)}</span></>
+                : 'No successful check yet'}
             </p>
             <p className="w-full text-xs leading-5 sm:w-auto">
               {status.enabled === false ? <Badge>Account disabled</Badge>
-                : status.error ? <span className="text-destructive" role="status">Fetch failed. Retrying on the next check.</span>
-                  : !status.fetchedAt ? <Badge>Waiting for first fetch</Badge>
-                    : <Badge variant="success">Fetched</Badge>}
+                : status.error ? <span className="text-destructive" role="status">Could not check inbox. Will retry automatically.</span>
+                  : !status.fetchedAt ? <Badge>First check pending</Badge>
+                    : <Badge>{status.conversationCount === 0 ? 'No private messages yet'
+                      : `${status.conversationCount} ${status.conversationCount === 1 ? 'conversation' : 'conversations'}`}</Badge>}
             </p>
           </li>
         ))}
@@ -124,6 +128,10 @@ export function MessagesPage({ data }) {
   const [search, setSearch] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const messages = data.messages || [];
+  const conversationCounts = new Map();
+  for (const message of messages) {
+    conversationCounts.set(message.accountId, (conversationCounts.get(message.accountId) || 0) + 1);
+  }
   const syncByAccount = new Map((data.messageSync || []).map((status) => [status.accountId, status]));
   for (const account of data.accounts || []) {
     syncByAccount.set(account.id, {
@@ -134,7 +142,9 @@ export function MessagesPage({ data }) {
       enabled: account.enabled,
     });
   }
-  const sync = [...syncByAccount.values()].sort((left, right) => left.accountId.localeCompare(right.accountId));
+  const sync = [...syncByAccount.values()]
+    .map((status) => ({ ...status, conversationCount: conversationCounts.get(status.accountId) || 0 }))
+    .sort((left, right) => left.accountId.localeCompare(right.accountId));
   const accountIds = [...new Set([...sync.map((status) => status.accountId), ...messages.map((message) => message.accountId)])].sort();
   const normalizedSearch = search.trim().toLowerCase();
   const accountMessages = messages.filter((message) => account === 'all' || message.accountId === account);
@@ -191,7 +201,7 @@ export function MessagesPage({ data }) {
               {unreadCount} unread {unreadCount === 1 ? 'message' : 'messages'}
             </p>
             {fetchErrors > 0 ? (
-              <p role="status" className="text-destructive">{fetchErrors} {fetchErrors === 1 ? 'account needs attention' : 'accounts need attention'}</p>
+              <p role="status" className="text-destructive">{fetchErrors} {fetchErrors === 1 ? 'inbox could not be checked' : 'inboxes could not be checked'}</p>
             ) : null}
           </div>
         </div>

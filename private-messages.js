@@ -43,7 +43,7 @@ function readMessageList(document = globalThis.document) {
     });
   }
   const body = compact(document.body?.textContent);
-  const empty = /暂无私信|暂无消息|没有私信|还没有.*私信|No (?:private )?messages/i.test(body);
+  const empty = /暂无私信|暂无消息|没有(?:新)?私信|还没有.*私信|No (?:private )?messages/i.test(body);
   const next = [...document.querySelectorAll('a[rel="next"], .pagination a, .pager a')]
     .find((link) => link.rel === 'next' || /^(下一页|下页|Next|›|»)$/i.test(compact(link.textContent)));
   return { messages: [...messages.values()], empty, next: next?.getAttribute('href') || '' };
@@ -63,7 +63,7 @@ async function fetchPrivateMessages(page, store, accountId) {
     await page.waitForFunction(() => {
       const text = document.body?.textContent || '';
       return document.querySelector('a[href*="/my/mail/thread/"]')
-        || /暂无私信|暂无消息|没有私信|还没有.*私信|No (?:private )?messages/i.test(text);
+        || /暂无私信|暂无消息|没有(?:新)?私信|还没有.*私信|No (?:private )?messages/i.test(text);
     }, null, { timeout: 30000 });
     const result = await page.evaluate(readMessageList);
     if (!result.messages.length && !result.empty) throw new Error('ZF private message list could not be recognized.');
