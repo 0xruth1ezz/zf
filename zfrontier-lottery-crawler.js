@@ -509,15 +509,15 @@ async function fillLoginFormIfPossible(page, account) {
 }
 
 async function waitForLoginCompletion(page, account) {
+  const passwordInput = page.locator('input[type="password"]').first();
   try {
-    await page.waitForFunction(() => {
-      const text = document.body?.innerText || '';
-      const hasLoginForm = Boolean(document.querySelector('input[type="password"]'))
-        || /手机号注册登录|登录\/注册/.test(text);
-      return !window.location.pathname.includes('/app/login') && !hasLoginForm;
-    }, null, { timeout: 20000 });
+    // Successful phone login closes the form but can leave the login landing
+    // page and its login-method labels visible. Verify the session after returning.
+    await passwordInput.waitFor({ state: 'hidden', timeout: 20000 });
   } catch {
     log.warning(`[${account.id}] Automatic login did not finish within 20s. Please complete any remaining login step if a browser is visible.`);
+    await page.bringToFront().catch(() => {});
+    await passwordInput.waitFor({ state: 'hidden', timeout: CONFIG.manualTimeoutMs });
   }
 }
 
@@ -533,17 +533,19 @@ async function ensureLoggedIn(page, account, returnUrl = page.url()) {
     await waitForLoginCompletion(page, account);
   } else {
     log.warning(`[${account.id}] Could not fill the login form automatically. Complete login manually if a browser is visible.`);
+    await page.bringToFront().catch(() => {});
+    await page.waitForFunction(() => {
+      const text = document.body?.innerText || '';
+      return !document.querySelector('input[type="password"]')
+        && !/手机号注册登录|登录\/注册/.test(text);
+    }, null, { timeout: CONFIG.manualTimeoutMs });
   }
 
-  await page.bringToFront().catch(() => {});
-  await page.waitForFunction(() => {
-    const text = document.body?.innerText || '';
-    return !document.querySelector('input[type="password"]')
-      && !/手机号注册登录|登录\/注册/.test(text);
-  }, null, { timeout: CONFIG.manualTimeoutMs });
-
-  if (returnUrl && !returnUrl.includes('/app/login')) {
-    await navigateTo(page, returnUrl, 'Returning after login');
+  const destination = returnUrl && new URL(returnUrl).pathname !== new URL(LOGIN_URL).pathname
+    ? returnUrl : START_URL;
+  await navigateTo(page, destination, 'Returning after login');
+  if (!(await isLoggedIn(page))) {
+    throw new Error(`[${account.id}] Login did not authenticate the account. Check the account credentials or verification.`);
   }
 }
 
@@ -1339,6 +1341,7 @@ if (require.main === module) {
 module.exports = {
   blockPageMedia,
   engageLottery,
+  ensureLoggedIn,
   ensureLotterySchedule,
   isDrawTimeCompleted,
   isHourlyEngagementDue,
