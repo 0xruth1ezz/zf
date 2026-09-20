@@ -28,6 +28,16 @@ function openEngagedStore(dbPath, htmlPath) {
     CREATE INDEX IF NOT EXISTS idx_engaged_lotteries_account_engaged_at
       ON engaged_lotteries (account_id, engaged_at DESC);
 
+    CREATE TABLE IF NOT EXISTS lottery_schedules (
+      account_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      draw_at TEXT NOT NULL,
+      scheduled_second INTEGER,
+      PRIMARY KEY (account_id, post_id)
+    );
+
     CREATE TABLE IF NOT EXISTS daily_sign_ins (
       account_id TEXT NOT NULL,
       sign_in_date TEXT NOT NULL,
@@ -197,6 +207,40 @@ function getEngagement(store, accountId, postId) {
 
 function hasEngagement(store, accountId, postId) {
   return Boolean(getEngagement(store, accountId, postId));
+}
+
+function getLotterySchedule(store, accountId, postId) {
+  return store.db.prepare(`
+    SELECT account_id AS accountId, post_id AS postId, title, url,
+      draw_at AS drawAt, scheduled_second AS scheduledSecond
+    FROM lottery_schedules WHERE account_id = ? AND post_id = ?
+  `).get(accountId, postId);
+}
+
+function saveLotterySchedule(store, record) {
+  store.db.prepare(`
+    INSERT INTO lottery_schedules (account_id, post_id, title, url, draw_at, scheduled_second)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(account_id, post_id) DO UPDATE SET
+      title = excluded.title, url = excluded.url, draw_at = excluded.draw_at,
+      scheduled_second = excluded.scheduled_second
+  `).run(record.accountId, record.postId, record.title || record.url, record.url,
+    record.drawAt, record.scheduledSecond ?? null);
+}
+
+function listTrackedLotteries(store) {
+  const records = new Map(listEngagements(store)
+    .map((record) => [JSON.stringify([record.accountId, record.postId]), record]));
+  const schedules = store.db.prepare(`
+    SELECT account_id AS accountId, post_id AS postId, title, url,
+      draw_at AS drawAt, scheduled_second AS scheduledSecond
+    FROM lottery_schedules
+  `).all();
+  for (const schedule of schedules) {
+    const key = JSON.stringify([schedule.accountId, schedule.postId]);
+    records.set(key, { ...records.get(key), ...schedule });
+  }
+  return [...records.values()];
 }
 
 function saveEngagement(store, record) {
@@ -878,13 +922,16 @@ module.exports = {
   countEngagements,
   countSignIns,
   getEngagement,
+  getLotterySchedule,
   hasEngagement,
   hasSignIn,
   listAccounts,
   listEngagements,
+  listTrackedLotteries,
   listSignIns,
   openEngagedStore,
   renderEngagementHtml,
   saveEngagement,
+  saveLotterySchedule,
   saveSignIn,
 };

@@ -9,12 +9,14 @@ const {
   countEngagements,
   countSignIns,
   getEngagement,
+  getLotterySchedule,
   hasSignIn,
   listAccounts,
-  listEngagements,
+  listTrackedLotteries,
   openEngagedStore,
   renderEngagementHtml,
   saveEngagement,
+  saveLotterySchedule,
   saveSignIn,
   saveMessageSyncError,
   initializeMessageSync,
@@ -34,11 +36,6 @@ const ENGAGED_HTML = process.env.ZF_ENGAGED_HTML || path.join(ROOT_DIR, 'engaged
 const CONFIG = {
   publishWindowDays: numberFromEnv('ZF_DAYS', 7),
   signInTimeZone: process.env.ZF_SIGN_IN_TZ || 'Asia/Shanghai',
-  lotteryEngagementsPerDay: Math.max(1, numberFromEnv(
-    'ZF_LOTTERY_ENGAGEMENTS_PER_DAY',
-    numberFromEnv('LOTTERY_ENGAGEMENTS_PER_DAY', 2),
-  )),
-  preDrawEngagementMinutes: Math.max(1, Math.floor(numberFromEnv('ZF_PRE_DRAW_ENGAGEMENT_MINUTES', 5))),
   maxScrolls: numberFromEnv('MAX_SCROLLS', 80),
   maxPosts: numberFromEnv('MAX_POSTS', 0),
   scrollWaitMs: numberFromEnv('SCROLL_WAIT_MS', 1200),
@@ -215,61 +212,83 @@ function minuteValueForTimeZone(date, timeZone = CONFIG.signInTimeZone) {
   return dateTimeMinuteValue(dateTimeMinuteKeyForTimeZone(date, timeZone));
 }
 
-function minutesUntilDraw(drawAt, now = new Date()) {
-  const drawMinute = dateTimeMinuteValue(drawAt);
-  const nowMinute = minuteValueForTimeZone(now);
-  if (drawMinute === null || nowMinute === null) return null;
-  return drawMinute - nowMinute;
+// Schedule seconds are local wall-clock values in ZF_SIGN_IN_TZ, matching draw_at.
+function secondValueForTimeZone(date) {
+  return minuteValueForTimeZone(date) * 60
+    + date.getUTCSeconds() + date.getUTCMilliseconds() / 1000;
 }
 
-function wasEngagedInPreDrawWindow(
-  record,
-  drawAt = record?.drawAt,
-  preDrawMinutes = CONFIG.preDrawEngagementMinutes,
-) {
-  if (!record?.engagedAt) return false;
-
-  const engagedDate = new Date(record.engagedAt);
-  if (Number.isNaN(engagedDate.getTime())) return false;
-
-  const drawMinute = dateTimeMinuteValue(drawAt);
-  const engagedMinute = minuteValueForTimeZone(engagedDate);
-  if (drawMinute === null || engagedMinute === null) return false;
-  return engagedMinute >= drawMinute - preDrawMinutes && engagedMinute < drawMinute;
+function wasEngagedInHour(record, hourStart) {
+  const engagedAt = new Date(record?.engagedAt || '');
+  if (Number.isNaN(engagedAt.getTime())) return false;
+  const engagedSecond = secondValueForTimeZone(engagedAt);
+  return engagedSecond >= hourStart && engagedSecond < hourStart + 3600;
 }
 
-function isPreDrawEngagementDue(
-  record,
-  now = new Date(),
-  preDrawMinutes = CONFIG.preDrawEngagementMinutes,
-) {
-  const remainingMinutes = minutesUntilDraw(record?.drawAt, now);
-  return remainingMinutes !== null
-    && remainingMinutes > 0
-    && remainingMinutes <= preDrawMinutes
-    && !wasEngagedInPreDrawWindow(record, record.drawAt, preDrawMinutes);
-}
+function nextHourlyEngagementSecond(record, now = new Date(), random = Math.random) {
+  const drawMinute = dateTimeMinuteValue(record.drawAt);
+  if (drawMinute === null) return null;
+  const drawSecond = drawMinute * 60;
+  const nowSecond = secondValueForTimeZone(now);
+  const today = Math.floor(nowSecond / 86400) * 86400;
 
-function nextPreDrawDelaySeconds(
-  records,
-  now = new Date(),
-  preDrawMinutes = CONFIG.preDrawEngagementMinutes,
-) {
-  const secondOffset = now.getUTCSeconds() + (now.getUTCMilliseconds() / 1000);
-  let nextDelay = null;
+  // Only the current and next local day are needed. Missed hours are never replayed.
+  for (let day = today; day <= today + 86400; day += 86400) {
+    for (let hour = 7; hour < 24; hour += 1) {
+      const hourStart = day + hour * 3600;
+      const start = hourStart + (hour === 7 ? 1800 : 0);
+      const end = Math.min(hourStart + 3600, drawSecond);
+      const earliest = Math.max(start, Math.ceil(nowSecond));
+      if (earliest >= end || wasEngagedInHour(record, hourStart)) continue;
 
-  for (const record of records) {
-    const remainingMinutes = minutesUntilDraw(record.drawAt, now);
-    if (remainingMinutes === null || remainingMinutes <= 0) continue;
-    if (wasEngagedInPreDrawWindow(record, record.drawAt, preDrawMinutes)) continue;
-
-    const delay = Math.max(0, Math.ceil(
-      ((remainingMinutes - preDrawMinutes) * 60) - secondOffset,
-    ));
-    nextDelay = nextDelay === null ? delay : Math.min(nextDelay, delay);
+      // Keep an existing random time across polling and process restarts, including
+      // overdue work within its hour. A later hour receives a fresh random time.
+      if (record.scheduledSecond >= start && record.scheduledSecond < end) {
+        return record.scheduledSecond;
+      }
+      return earliest + Math.floor(random() * (end - earliest));
+    }
   }
+  return null;
+}
 
-  return nextDelay;
+function isHourlyEngagementDue(record, now = new Date()) {
+  if (!Number.isFinite(record?.scheduledSecond)) return false;
+  const nowSecond = secondValueForTimeZone(now);
+  const hourStart = Math.floor(record.scheduledSecond / 3600) * 3600;
+  const dayStart = Math.floor(hourStart / 86400) * 86400;
+  const drawMinute = dateTimeMinuteValue(record.drawAt);
+  return record.scheduledSecond >= dayStart + 7.5 * 3600
+    && nowSecond >= record.scheduledSecond
+    && nowSecond < hourStart + 3600
+    && drawMinute !== null && nowSecond < drawMinute * 60
+    && !wasEngagedInHour(record, hourStart);
+}
+
+function ensureLotterySchedule(store, record, now = new Date(), random = Math.random) {
+  const existing = getLotterySchedule(store, record.accountId, record.postId);
+  const engagement = getEngagement(store, record.accountId, record.postId);
+  const schedule = { ...engagement, ...existing, ...record };
+  schedule.scheduledSecond = nextHourlyEngagementSecond(schedule, now, random);
+  if (!existing || ['title', 'url', 'drawAt', 'scheduledSecond']
+    .some((key) => existing[key] !== schedule[key])) {
+    saveLotterySchedule(store, schedule);
+  }
+  return schedule;
+}
+
+function refreshLotterySchedules(store, now = new Date()) {
+  return listTrackedLotteries(store)
+    .filter((record) => dateTimeMinuteValue(record.drawAt) !== null)
+    .map((record) => ensureLotterySchedule(store, record, now));
+}
+
+function nextHourlyDelaySeconds(records, now = new Date()) {
+  const nowSecond = secondValueForTimeZone(now);
+  const delays = records
+    .filter((record) => Number.isFinite(record.scheduledSecond))
+    .map((record) => Math.max(0, Math.ceil(record.scheduledSecond - nowSecond)));
+  return delays.length ? Math.min(...delays) : null;
 }
 
 async function isVisible(locator, timeout = 500) {
@@ -360,6 +379,25 @@ async function navigateTo(page, url, reason) {
   }
 
   throw lastError;
+}
+
+async function blockPageMedia(page, loginUrl = LOGIN_URL) {
+  const login = new URL(loginUrl);
+  const loginPath = login.pathname.replace(/\/+$/, '');
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    if (!['image', 'media'].includes(request.resourceType())) return route.continue();
+
+    // Login assets can come from a CDN or a nested verification frame. Check
+    // the owning document and its ancestors, rather than the asset's URL.
+    for (let frame = request.frame(); frame; frame = frame.parentFrame()) {
+      const url = new URL(frame.url() || 'about:blank');
+      if (url.origin === login.origin && url.pathname.replace(/\/+$/, '') === loginPath) {
+        return route.continue();
+      }
+    }
+    return route.abort();
+  });
 }
 
 async function isLoggedIn(page) {
@@ -602,22 +640,18 @@ function trackedActiveLotteryRequests(records, accountId, now = new Date()) {
 }
 
 function loadTrackedActiveLotteryRequests(store, accountId, now = new Date()) {
-  return trackedActiveLotteryRequests(listEngagements(store), accountId, now);
+  return trackedActiveLotteryRequests(listTrackedLotteries(store), accountId, now);
 }
 
-function preDrawLotteryRequests(records, accountId, now = new Date()) {
-  const duePostIds = new Set();
-  for (const record of records) {
-    if (record.accountId === accountId && isPreDrawEngagementDue(record, now)) {
-      duePostIds.add(record.postId);
-    }
-  }
-  return trackedActiveLotteryRequests(records, accountId, now)
-    .filter((request) => duePostIds.has(request.uniqueKey));
-}
-
-function loadPreDrawLotteryRequests(store, accountId, now = new Date()) {
-  return preDrawLotteryRequests(listEngagements(store), accountId, now);
+function loadHourlyLotteryRequests(store, accountId, now = new Date()) {
+  const records = refreshLotterySchedules(store, now)
+    .filter((record) => record.accountId === accountId && isHourlyEngagementDue(record, now))
+    .sort((left, right) => left.scheduledSecond - right.scheduledSecond);
+  return records.flatMap((record) => trackedActiveLotteryRequests([record], accountId, now)
+    .map((request) => ({
+      ...request,
+      userData: { ...request.userData, hourlySlot: Math.floor(record.scheduledSecond / 3600) },
+    })));
 }
 
 function mergePostRequests(...requestGroups) {
@@ -736,17 +770,6 @@ function dailyEngagementCountFor(record, dateKey) {
   return Math.max(0, Number(record.dailyEngagementCount) || 0);
 }
 
-function isDailyEngagementLimitBlocking(
-  record,
-  dateKey,
-  drawAt,
-  now = new Date(),
-  dailyLimit = CONFIG.lotteryEngagementsPerDay,
-) {
-  return dailyEngagementCountFor(record, dateKey) >= dailyLimit
-    && !isPreDrawEngagementDue({ ...(record || {}), drawAt }, now);
-}
-
 function saveExistingEngagementMetadata(store, existingEngagement, updates) {
   saveEngagement(store, {
     accountId: existingEngagement.accountId,
@@ -792,13 +815,21 @@ async function visibleLotteryButton(page) {
   return (await isVisible(locator, 1000)) ? locator.first() : null;
 }
 
-async function clickConfirmIfVisible(page) {
-  await clickFirstVisible(page, [
+async function clickConfirmIfVisible(page, canEngage) {
+  for (const locator of [
     page.getByText('确定', { exact: true }),
     page.getByText('确认', { exact: true }),
     page.getByText(RUSH_TEXT, { exact: true }),
     page.locator('a,button,.submit').filter({ hasText: RUSH_TEXT }),
-  ], 1500).catch(() => false);
+  ]) {
+    if (!(await isVisible(locator, 1500))) continue;
+    await locator.first().scrollIntoViewIfNeeded().catch(() => {});
+    if (!canEngage()) return { expired: true };
+    const engagedAt = new Date().toISOString();
+    await locator.first().click();
+    return { engagedAt };
+  }
+  return {};
 }
 
 async function clickSignInConfirmIfVisible(page) {
@@ -950,7 +981,7 @@ async function clickThumbUpIfPossible(page) {
   return result;
 }
 
-async function engageLottery(page) {
+async function engageLottery(page, canEngage) {
   const button = await visibleLotteryButton(page);
   if (!button) return { engaged: false, reason: `No visible "${LOTTERY_TEXT}" button` };
 
@@ -959,26 +990,31 @@ async function engageLottery(page) {
   }
 
   await button.scrollIntoViewIfNeeded().catch(() => {});
+  if (!canEngage()) return { engaged: false, reason: 'Hourly engagement is no longer due' };
+  let engagedAt = new Date().toISOString();
   await button.click();
   await waitForManualCheckpoint(page, 'After clicking lottery');
   await page.waitForTimeout(1000);
-  await clickConfirmIfVisible(page);
+  if (!canEngage()) return { engaged: false, reason: 'Hourly engagement window ended before confirmation' };
+  const confirmation = await clickConfirmIfVisible(page, canEngage);
+  if (confirmation.expired) return { engaged: false, reason: 'Hourly engagement window ended before confirmation' };
+  engagedAt = confirmation.engagedAt || engagedAt;
   await waitForManualCheckpoint(page, 'After confirming lottery');
   await page.waitForTimeout(2000);
 
   const text = await page.locator('body').innerText().catch(() => '');
   if (/已(参与|参加|抽奖|报名)|参与成功|回复成功|提交成功|冲冲冲/.test(text)) {
-    return { engaged: true, reason: 'Clicked lottery action and detected a success/participation hint' };
+    return { engaged: true, engagedAt, reason: 'Clicked lottery action and detected a success/participation hint' };
   }
 
-  return { engaged: true, reason: 'Clicked lottery action; no explicit failure was detected' };
+  return { engaged: true, engagedAt, reason: 'Clicked lottery action; no explicit failure was detected' };
 }
 
 async function processPost(page, postRequest, engagedStore, account) {
   const postUrl = normalizePostUrl(postRequest.url);
   const postId = postIdFromUrl(postUrl);
-  const today = dateKeyForTimeZone();
   const existingEngagement = getEngagement(engagedStore, account.id, postId);
+  const existingSchedule = getLotterySchedule(engagedStore, account.id, postId);
   if (existingEngagement?.drawAt && isDrawTimeCompleted(existingEngagement.drawAt)) {
     log.info(`[${account.id}] Skipping ${postId}: draw time ${existingEngagement.drawAt} has passed.`);
     return;
@@ -988,7 +1024,7 @@ async function processPost(page, postRequest, engagedStore, account) {
   await waitForManualCheckpoint(page, `Opening post ${postId}`);
   await ensureLoggedIn(page, account, postUrl);
   const meta = await extractPostMeta(page, postRequest);
-  const drawAt = meta.drawAt || existingEngagement?.drawAt || '';
+  const drawAt = meta.drawAt || existingSchedule?.drawAt || existingEngagement?.drawAt || postRequest.userData.drawAt || '';
 
   if (existingEngagement && meta.drawAt && meta.drawAt !== existingEngagement.drawAt) {
     saveExistingEngagementMetadata(engagedStore, existingEngagement, {
@@ -1013,30 +1049,29 @@ async function processPost(page, postRequest, engagedStore, account) {
   }
 
   if (isDrawTimeCompleted(drawAt)) {
+    if (existingSchedule) {
+      saveLotterySchedule(engagedStore, { ...existingSchedule, drawAt, scheduledSecond: null });
+    }
     log.info(`[${account.id}] Skipping ${postId}: draw time ${drawAt} has passed.`);
     return;
   }
 
-  const engagementNow = new Date();
-  const preDrawEngagementDue = isPreDrawEngagementDue({
-    ...(existingEngagement || {}),
-    drawAt,
-  }, engagementNow);
-
-  if (!existingEngagement && !isWithinPublishWindow(meta.publishedAt)) {
+  if (!existingEngagement && !existingSchedule && !isWithinPublishWindow(meta.publishedAt)) {
     const dateText = meta.publishedAt ? meta.publishedAt.toISOString() : 'unknown date';
     log.info(`[${account.id}] Skipping ${postId}: published ${dateText}, outside the last ${CONFIG.publishWindowDays} days.`);
     return;
   }
 
-  const dailyCount = dailyEngagementCountFor(existingEngagement, today);
-  if (isDailyEngagementLimitBlocking(existingEngagement, today, drawAt, engagementNow)) {
-    log.info(`[${account.id}] Skipping ${postId}: already engaged ${dailyCount}/${CONFIG.lotteryEngagementsPerDay} times for ${today}.`);
+  const schedule = ensureLotterySchedule(engagedStore, {
+    accountId: account.id, postId, url: postUrl, title: meta.title, drawAt,
+  });
+  const canEngage = () => isHourlyEngagementDue({
+    ...schedule,
+    engagedAt: getEngagement(engagedStore, account.id, postId)?.engagedAt,
+  });
+  if (!canEngage()) {
+    log.info(`[${account.id}] Skipping ${postId}: waiting for its next random hourly engagement (07:30–24:00 ${CONFIG.signInTimeZone}).`);
     return;
-  }
-
-  if (preDrawEngagementDue) {
-    log.info(`[${account.id}] ${postId}: final pre-draw engagement is due before ${drawAt}.`);
   }
 
   if (/已(参与|参加|抽奖|报名)/.test(meta.bodyText) && !(await visibleLotteryButton(page))) {
@@ -1047,13 +1082,15 @@ async function processPost(page, postRequest, engagedStore, account) {
   const thumbResult = await clickThumbUpIfPossible(page);
   log.info(`[${account.id}] ${postId}: ${thumbResult.reason}.`);
 
-  const result = await engageLottery(page);
+  const result = await engageLottery(page, canEngage);
   if (!result.engaged) {
     log.info(`[${account.id}] Skipping ${postId}: ${result.reason}.`);
     return;
   }
 
-  const engagedAt = new Date().toISOString();
+  const engagedAt = result.engagedAt;
+  const today = dateKeyForTimeZone(new Date(engagedAt));
+  const dailyCount = dailyEngagementCountFor(getEngagement(engagedStore, account.id, postId), today);
   saveEngagement(engagedStore, {
     accountId: account.id,
     postId,
@@ -1065,8 +1102,7 @@ async function processPost(page, postRequest, engagedStore, account) {
     engagedAt,
   });
   renderEngagementHtml(engagedStore);
-  const engagementLabel = preDrawEngagementDue ? 'pre-draw' : 'daily';
-  log.info(`[${account.id}] Recorded ${engagementLabel} engagement for lottery post ${postId} (${dailyCount + 1} for ${today}): ${meta.title || postUrl}`);
+  log.info(`[${account.id}] Recorded hourly engagement for lottery post ${postId} (${dailyCount + 1} for ${today}): ${meta.title || postUrl}`);
 }
 
 async function main() {
@@ -1089,6 +1125,7 @@ async function main() {
   const failedAccounts = [];
   for (const account of accounts) {
     try {
+      if (CONFIG.trackedOnly && loadHourlyLotteryRequests(engagedStore, account.id).length === 0) continue;
       await runAccount(account, engagedStore, accounts.length);
     } catch (error) {
       failedAccounts.push(account.id);
@@ -1120,18 +1157,18 @@ async function processPostRequests(page, postRequests, engagedStore, account) {
   }
 }
 
-async function processNewlyDuePreDrawLotteries(
+async function processNewlyDueHourlyLotteries(
   page,
   engagedStore,
   account,
-  attemptedPostIds,
+  attemptedHourlySlots,
 ) {
-  const dueRequests = loadPreDrawLotteryRequests(engagedStore, account.id)
-    .filter((request) => !attemptedPostIds.has(request.uniqueKey));
+  const dueRequests = loadHourlyLotteryRequests(engagedStore, account.id)
+    .filter((request) => !attemptedHourlySlots.has(`${request.uniqueKey}:${request.userData.hourlySlot}`));
   if (dueRequests.length === 0) return;
 
-  dueRequests.forEach((request) => attemptedPostIds.add(request.uniqueKey));
-  log.info(`[${account.id}] Interrupting feed processing for ${dueRequests.length} newly due pre-draw lotteries.`);
+  dueRequests.forEach((request) => attemptedHourlySlots.add(`${request.uniqueKey}:${request.userData.hourlySlot}`));
+  log.info(`[${account.id}] Interrupting feed processing for ${dueRequests.length} newly due hourly lotteries.`);
   await processPostRequests(page, dueRequests, engagedStore, account);
 }
 
@@ -1164,8 +1201,15 @@ async function runAccount(account, engagedStore, accountCount) {
       useIncognitoPages: false,
       launchOptions: {
         headless: CONFIG.headless,
+        // Service workers can serve resources without passing through page.route().
+        serviceWorkers: 'block',
         viewport: { width: CONFIG.viewportWidth, height: CONFIG.viewportHeight },
       },
+    },
+    browserPoolOptions: {
+      // Requests use skipNavigation and page.goto(), so navigation hooks alone
+      // would miss the resource filter.
+      postPageCreateHooks: [async (page) => blockPageMedia(page)],
     },
     preNavigationHooks: [
       async (_crawlingContext, gotoOptions) => {
@@ -1185,14 +1229,10 @@ async function runAccount(account, engagedStore, accountCount) {
           return;
         }
 
-        const trackedPostRequests = CONFIG.trackedOnly
-          ? loadPreDrawLotteryRequests(engagedStore, account.id)
-          : loadTrackedActiveLotteryRequests(engagedStore, account.id);
-        const attemptedPreDrawPostIds = new Set(
-          loadPreDrawLotteryRequests(engagedStore, account.id)
-            .map((postRequest) => postRequest.uniqueKey),
-        );
-        log.info(`[${account.id}] Processing ${trackedPostRequests.length} database-tracked ${CONFIG.trackedOnly ? 'pre-draw' : 'active'} lotteries first.`);
+        const trackedPostRequests = loadHourlyLotteryRequests(engagedStore, account.id);
+        const attemptedHourlySlots = new Set(trackedPostRequests
+          .map((request) => `${request.uniqueKey}:${request.userData.hourlySlot}`));
+        log.info(`[${account.id}] Processing ${trackedPostRequests.length} due hourly lotteries first.`);
         await processPostRequests(page, trackedPostRequests, engagedStore, account);
 
         if (CONFIG.trackedOnly) {
@@ -1206,18 +1246,18 @@ async function runAccount(account, engagedStore, accountCount) {
         const discoveredPostRequests = mergePostRequests(await collectPostRequests(page))
           .filter((postRequest) => !trackedPostIds.has(postRequest.uniqueKey));
         log.info(`[${account.id}] Processing ${discoveredPostRequests.length} additional post pages discovered from the 情报 tab.`);
-        await processNewlyDuePreDrawLotteries(
+        await processNewlyDueHourlyLotteries(
           page,
           engagedStore,
           account,
-          attemptedPreDrawPostIds,
+          attemptedHourlySlots,
         );
         for (const postRequest of discoveredPostRequests) {
-          await processNewlyDuePreDrawLotteries(
+          await processNewlyDueHourlyLotteries(
             page,
             engagedStore,
             account,
-            attemptedPreDrawPostIds,
+            attemptedHourlySlots,
           );
           await processPostRequests(page, [postRequest], engagedStore, account);
         }
@@ -1237,13 +1277,13 @@ async function runAccount(account, engagedStore, accountCount) {
   }
 }
 
-function printNextPreDrawDelay() {
+function printNextHourlyDelay() {
   const engagedStore = openEngagedStore(ENGAGED_DB, ENGAGED_HTML);
   try {
     const enabledAccountIds = new Set(loadAccounts(engagedStore).map((account) => account.id));
-    const records = listEngagements(engagedStore)
+    const records = refreshLotterySchedules(engagedStore)
       .filter((record) => enabledAccountIds.has(record.accountId));
-    const delay = nextPreDrawDelaySeconds(records);
+    const delay = nextHourlyDelaySeconds(records);
     process.stdout.write(delay === null ? 'none\n' : `${delay}\n`);
   } finally {
     engagedStore.db.close();
@@ -1251,11 +1291,11 @@ function printNextPreDrawDelay() {
 }
 
 if (require.main === module) {
-  if (hasFlag('--next-pre-draw-delay')) {
+  if (hasFlag('--next-hourly-delay')) {
     try {
-      printNextPreDrawDelay();
+      printNextHourlyDelay();
     } catch (error) {
-      log.exception(error, 'Failed to calculate the next pre-draw run');
+      log.exception(error, 'Failed to calculate the next hourly run');
       process.exitCode = 1;
     }
   } else {
@@ -1267,14 +1307,17 @@ if (require.main === module) {
 }
 
 module.exports = {
-  isDailyEngagementLimitBlocking,
+  blockPageMedia,
+  engageLottery,
+  ensureLotterySchedule,
   isDrawTimeCompleted,
-  isPreDrawEngagementDue,
-  loadPreDrawLotteryRequests,
+  isHourlyEngagementDue,
+  loadHourlyLotteryRequests,
   loadTrackedActiveLotteryRequests,
   mergePostRequests,
-  nextPreDrawDelaySeconds,
-  preDrawLotteryRequests,
+  nextHourlyDelaySeconds,
+  nextHourlyEngagementSecond,
+  processPost,
+  refreshLotterySchedules,
   trackedActiveLotteryRequests,
-  wasEngagedInPreDrawWindow,
 };
