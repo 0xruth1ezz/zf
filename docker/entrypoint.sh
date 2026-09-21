@@ -6,14 +6,16 @@ mkdir -p "${ZF_PROFILE_DIR:-/data/browser-profile}" \
   "$(dirname "${ZF_ENGAGED_DB:-/data/engaged-lotteries.sqlite}")"
 
 run_crawler_once() {
-  run_mode="${1:-full}"
-  timeout_seconds="${CRAWLER_RUN_TIMEOUT_SECONDS:-1800}"
-  kill_after_seconds="${CRAWLER_KILL_AFTER_SECONDS:-60}"
-  crawler_command=(npm start)
+  local run_mode="${1:-full}"
+  local timeout_seconds="${CRAWLER_RUN_TIMEOUT_SECONDS:-1800}"
+  local kill_after_seconds="${CRAWLER_KILL_AFTER_SECONDS:-5}"
+  local status
+  local -a crawler_command=(node zfrontier-lottery-crawler.js)
   if [ "$run_mode" = "hourly" ]; then
-    crawler_command+=(-- --tracked-only)
+    crawler_command+=(--tracked-only)
+    timeout_seconds="${HOURLY_RUN_TIMEOUT_SECONDS:-120}"
   elif [ "$run_mode" = "messages" ]; then
-    crawler_command+=(-- --messages-only)
+    crawler_command+=(--messages-only)
     timeout_seconds="${MESSAGE_FETCH_TIMEOUT_SECONDS:-840}"
   fi
 
@@ -28,23 +30,25 @@ run_crawler_once() {
       return 75
     else
       echo "[crawler] failed with exit code ${status} at $(date -Is)" >&2
-      return 0
+      return "$status"
     fi
   fi
 }
 
 message_loop() {
   local interval="${MESSAGE_FETCH_INTERVAL_SECONDS:-900}"
-  local started elapsed remaining
+  local started elapsed remaining status
   if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
     echo "[messages] MESSAGE_FETCH_INTERVAL_SECONDS must be a positive integer" >&2
     return 1
   fi
   while true; do
     started=$SECONDS
-    run_crawler_once messages || true
+    status=0
+    run_crawler_once messages || status=$?
     elapsed=$((SECONDS - started))
     remaining=$((interval - elapsed))
+    if [ "$status" -ne 0 ]; then remaining="${CRAWLER_RESTART_DELAY_SECONDS:-60}"; fi
     if [ "$remaining" -lt 1 ]; then remaining=1; fi
     sleep "$remaining"
   done
@@ -60,7 +64,7 @@ crawler_loop() {
     status=0
     run_crawler_once full || status=$?
     remaining=$((interval - (SECONDS - started)))
-    if [ "$status" -eq 75 ]; then remaining="$restart_delay"; fi
+    if [ "$status" -ne 0 ]; then remaining="$restart_delay"; fi
     if [ "$remaining" -lt 1 ]; then remaining=1; fi
     sleep "$remaining"
   done

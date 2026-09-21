@@ -3,8 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
-const { PlaywrightCrawler, RequestQueue, log } = require('crawlee');
-const { chromium } = require('playwright');
+const { default: log } = require('@apify/log');
 const {
   countEngagements,
   countSignIns,
@@ -41,8 +40,8 @@ const CONFIG = {
   scrollWaitMs: numberFromEnv('SCROLL_WAIT_MS', 1200),
   manualTimeoutMs: numberFromEnv('MANUAL_TIMEOUT_MS', 10 * 60 * 1000),
   requestTimeoutSecs: numberFromEnv('REQUEST_TIMEOUT_SECS', 6 * 60 * 60),
-  viewportWidth: Math.max(960, numberFromEnv('VIEWPORT_WIDTH', 1600)),
-  viewportHeight: Math.max(720, numberFromEnv('VIEWPORT_HEIGHT', 1200)),
+  viewportWidth: Math.max(960, numberFromEnv('VIEWPORT_WIDTH', 1920)),
+  viewportHeight: Math.max(720, numberFromEnv('VIEWPORT_HEIGHT', 1080)),
   dryRun: hasFlag('--dry-run') || process.env.DRY_RUN === '1',
   trackedOnly: hasFlag('--tracked-only'),
   messagesOnly: hasFlag('--messages-only'),
@@ -56,6 +55,14 @@ const RUSH_TEXT = '一键冲冲冲';
 const LOTTERY_PREPARE_SECONDS = 30;
 const LOTTERY_LATE_SECONDS = 15;
 const PUBLISH_WINDOW_MS = CONFIG.publishWindowDays * 24 * 60 * 60 * 1000;
+const FEED_SELECTOR = '.home .main-wrap > .list-wrap';
+const FEED_POST_SELECTOR = `${FEED_SELECTOR} .infinite-loading-wrap .list-flow a[href*="/app/flow/"]`;
+// Every post uses the same configured time zone; reuse the native ICU formatter.
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: CONFIG.signInTimeZone,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
 
 function numberFromEnv(name, fallback) {
   const value = Number(process.env[name]);
@@ -165,27 +172,12 @@ function profileDirForAccount(account, accountCount) {
   return path.join(PROFILE_DIR, account.id);
 }
 
-function dateKeyForTimeZone(date = new Date(), timeZone = CONFIG.signInTimeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
+function dateKeyForTimeZone(date = new Date()) {
+  return dateTimeMinuteKeyForTimeZone(date).slice(0, 10);
 }
 
-function dateTimeMinuteKeyForTimeZone(date = new Date(), timeZone = CONFIG.signInTimeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
+function dateTimeMinuteKeyForTimeZone(date = new Date()) {
+  const parts = DATE_TIME_FORMATTER.formatToParts(date);
   const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return [
     valueByType.year,
@@ -210,8 +202,8 @@ function dateTimeMinuteValue(value) {
   ) / 60000);
 }
 
-function minuteValueForTimeZone(date, timeZone = CONFIG.signInTimeZone) {
-  return dateTimeMinuteValue(dateTimeMinuteKeyForTimeZone(date, timeZone));
+function minuteValueForTimeZone(date) {
+  return dateTimeMinuteValue(dateTimeMinuteKeyForTimeZone(date));
 }
 
 // Schedule seconds are local wall-clock values in ZF_SIGN_IN_TZ, matching draw_at.
@@ -410,7 +402,10 @@ async function navigateTo(page, url, reason) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       log.info(`${reason}: navigating to ${target} (attempt ${attempt}/3).`);
-      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      if (response && !response.ok()) {
+        throw new Error(`${reason}: HTTP ${response.status()} from ${target}`);
+      }
       await waitForManualCheckpoint(page, reason);
       await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
       return;
@@ -551,21 +546,15 @@ async function ensureLoggedIn(page, account, returnUrl = page.url()) {
 
 async function ensureInfoTab(page) {
   await waitForManualCheckpoint(page, 'Selecting info tab');
-  const clicked = await clickFirstVisible(page, [
-    page.getByText('情报', { exact: true }),
-    page.locator('a,button,div,span').filter({ hasText: /^情报$/ }),
-  ], 1200).catch(() => false);
-
-  if (clicked) {
-    await page.waitForTimeout(1200);
+  const tabSelector = `${FEED_SELECTOR} .list-head .tabs-component-tab`;
+  const infoTab = page.locator(tabSelector).filter({ hasText: /^\s*情报\s*$/ }).first();
+  await infoTab.waitFor({ state: 'visible', timeout: 30000 });
+  if (!(await infoTab.evaluate((tab) => tab.classList.contains('active')))) {
+    await infoTab.click();
   }
-
-  await page.evaluate(() => {
-    if (window.location.hash !== '#info') {
-      window.location.hash = 'info';
-    }
-  }).catch(() => {});
-  await page.waitForTimeout(800);
+  await page.waitForFunction((selector) => [...document.querySelectorAll(selector)]
+    .some((tab) => tab.textContent.trim() === '情报' && tab.classList.contains('active')),
+  tabSelector, { timeout: 30000 });
 }
 
 async function collectPostRequests(page) {
@@ -574,47 +563,25 @@ async function collectPostRequests(page) {
 
   await ensureInfoTab(page);
   await waitForManualCheckpoint(page, 'Collecting posts');
-  await page.waitForSelector('a[href*="/app/flow/"]', { timeout: 30000 }).catch(() => {});
+  await page.waitForSelector(FEED_POST_SELECTOR, { timeout: 30000 });
 
   for (let scroll = 0; scroll <= CONFIG.maxScrolls; scroll += 1) {
     await waitForManualCheckpoint(page, `Collecting posts, scroll ${scroll}`);
-    await ensureInfoTab(page);
-
-    const batch = await page.evaluate(() => {
+    const batch = await page.evaluate((selector) => {
       const exactText = (element) => (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
-      const visible = (element) => {
-        const rect = element.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      };
-      const infoTab = [...document.querySelectorAll('a,button,div,span')]
-        .find((element) => exactText(element) === '情报' && visible(element));
-      const infoTabRect = infoTab?.getBoundingClientRect();
-      const infoTabDocBottom = infoTabRect ? infoTabRect.bottom + window.scrollY : 0;
-      const desktopMainRight = Math.min(window.innerWidth * 0.68, 930);
-      const mainRight = window.innerWidth >= 900 ? desktopMainRight : window.innerWidth;
-      const mainLeft = window.innerWidth >= 900 && infoTabRect ? Math.max(0, infoTabRect.left - 260) : 0;
-
-      return [...document.querySelectorAll('a[href*="/app/flow/"]')]
+      return [...document.querySelectorAll(selector)]
         .filter((anchor) => {
           const rect = anchor.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0) return false;
-
-          const docTop = rect.top + window.scrollY;
-          if (docTop < infoTabDocBottom - 10) return false;
-          if (window.innerWidth >= 900 && (rect.left < mainLeft || rect.left > mainRight)) return false;
-
-          const classText = `${anchor.className || ''} ${anchor.parentElement?.className || ''}`;
-          if (/banner|swiper|timeline-item|customer-service/.test(classText)) return false;
-
-          return true;
+          return rect.width > 0 && rect.height > 0;
         })
         .map((anchor) => ({
           url: anchor.href,
           text: exactText(anchor),
+          publishedText: anchor.closest('.list-flow').querySelector('.user-line')?.innerText || '',
           className: anchor.className || '',
           parentClassName: anchor.parentElement?.className || '',
         }));
-    });
+    }, FEED_POST_SELECTOR);
 
     let addedThisRound = 0;
     for (const item of batch) {
@@ -627,6 +594,7 @@ async function collectPostRequests(page) {
         userData: {
           label: 'POST',
           listText: item.text,
+          publishedText: item.publishedText,
           className: item.className,
           parentClassName: item.parentClassName,
         },
@@ -634,15 +602,17 @@ async function collectPostRequests(page) {
       addedThisRound += 1;
     }
 
-    if (addedThisRound === 0) {
+    const atBottom = await page.evaluate(() => window.scrollY + window.innerHeight
+      >= document.documentElement.scrollHeight - 5);
+    if (addedThisRound === 0 && atBottom) {
       roundsWithoutNewLinks += 1;
     } else {
       roundsWithoutNewLinks = 0;
-      log.info(`Discovered ${links.size} unique post links so far.`);
+      if (addedThisRound > 0) log.info(`Discovered ${links.size} unique post links so far.`);
     }
 
     if (roundsWithoutNewLinks >= 6) {
-      log.info('Stopping list scroll after 6 rounds without new post links.');
+      log.info('Stopping list scroll after 6 rounds at the bottom without new post links.');
       break;
     }
 
@@ -656,7 +626,34 @@ async function collectPostRequests(page) {
   }
 
   const requests = [...links.values()];
+  if (requests.length === 0) throw new Error('The info feed did not contain any post links.');
   return CONFIG.maxPosts > 0 ? requests.slice(0, CONFIG.maxPosts) : requests;
+}
+
+function crawlerBrowserPoolOptions() {
+  return {
+    // Crawlee replaces persistent-context viewports with fingerprint dimensions.
+    fingerprintOptions: {
+      fingerprintGeneratorOptions: {
+        browsers: ['chrome'],
+        devices: ['desktop'],
+        operatingSystems: [{ darwin: 'macos', win32: 'windows' }[process.platform] || 'linux'],
+        locales: ['en-US'],
+        screen: {
+          minWidth: CONFIG.viewportWidth,
+          maxWidth: CONFIG.viewportWidth,
+          minHeight: CONFIG.viewportHeight,
+          maxHeight: CONFIG.viewportHeight,
+        },
+      },
+    },
+    // skipNavigation requests also need the resource filter before page.goto().
+    postPageCreateHooks: [async (page) => {
+      await blockPageMedia(page);
+      const { width, height } = page.viewportSize();
+      log.info(`Browser viewport: ${width}x${height}.`);
+    }],
+  };
 }
 
 function trackedActiveLotteryRequests(records, accountId, now = new Date()) {
@@ -1195,7 +1192,7 @@ async function main() {
     } catch (error) {
       failedAccounts.push(account.id);
       if (CONFIG.messagesOnly) saveMessageSyncError(engagedStore, account.id, 'Could not fetch private messages. Check the account login or ZF verification.');
-      log.error(`[${account.id}] Account run failed: ${error.message}`);
+      log.exception(error, `[${account.id}] Account run failed`);
     } finally {
       if (selected) rescheduleLotteryRequest(engagedStore, account.id, selected.request);
     }
@@ -1209,13 +1206,20 @@ async function main() {
   log.info(`View records at ${ENGAGED_HTML}.`);
   engagedStore.db.close();
 
-  if (accountsToRun.length > 0 && failedAccounts.length === accountsToRun.length) {
-    throw new Error('All configured accounts failed.');
+  if (failedAccounts.length > 0) {
+    throw new Error(`Failed accounts: ${failedAccounts.join(', ')}.`);
   }
 }
 
 async function processPostRequests(page, postRequests, engagedStore, account) {
   for (const postRequest of postRequests) {
+    const { publishedAt } = parsePublishedAtFromText(postRequest.userData.publishedText || '');
+    const postId = postIdFromUrl(postRequest.url);
+    if (publishedAt && Date.now() - publishedAt.getTime() > PUBLISH_WINDOW_MS
+      && !getEngagement(engagedStore, account.id, postId)
+      && !getLotterySchedule(engagedStore, account.id, postId)) {
+      continue;
+    }
     try {
       await processPost(page, postRequest, engagedStore, account);
     } catch (error) {
@@ -1225,6 +1229,9 @@ async function processPostRequests(page, postRequests, engagedStore, account) {
 }
 
 async function runAccount(account, engagedStore, accountCount, scheduledRequest) {
+  // Scheduler polls only need SQLite; load the browser stack for actual jobs.
+  const { PlaywrightCrawler, RequestQueue } = require('crawlee');
+  const { chromium } = require('playwright');
   const requestQueue = await RequestQueue.open(`zfrontier-${CONFIG.messagesOnly ? 'messages' : scheduledRequest ? 'lottery' : 'discovery'}-${account.id}-${Date.now()}`);
   await requestQueue.addRequest({
     url: START_URL,
@@ -1260,11 +1267,7 @@ async function runAccount(account, engagedStore, accountCount, scheduledRequest)
         viewport: { width: CONFIG.viewportWidth, height: CONFIG.viewportHeight },
       },
     },
-    browserPoolOptions: {
-      // Requests use skipNavigation and page.goto(), so navigation hooks alone
-      // would miss the resource filter.
-      postPageCreateHooks: [async (page) => blockPageMedia(page)],
-    },
+    browserPoolOptions: crawlerBrowserPoolOptions(),
     preNavigationHooks: [
       async (_crawlingContext, gotoOptions) => {
         gotoOptions.waitUntil = 'domcontentloaded';
@@ -1322,6 +1325,16 @@ function printNextHourlyDelay() {
   }
 }
 
+function finishCrawlerProcess(exitCode, graceMs = 5000) {
+  process.exitCode = exitCode;
+  // Native browser crashes can leave handles alive after Crawlee has torn down.
+  // Let normal shutdown/log flushing finish, but do not hold the worker forever.
+  setTimeout(() => {
+    log.warning(`Crawler finished, but shutdown exceeded ${graceMs}ms; exiting.`);
+    process.exit(exitCode);
+  }, graceMs).unref();
+}
+
 if (require.main === module) {
   if (hasFlag('--next-hourly-delay')) {
     try {
@@ -1331,18 +1344,21 @@ if (require.main === module) {
       process.exitCode = 1;
     }
   } else {
-    main().catch((error) => {
+    main().then(() => finishCrawlerProcess(0), (error) => {
       log.exception(error, 'Crawler failed');
-      process.exitCode = 1;
+      finishCrawlerProcess(1);
     });
   }
 }
 
 module.exports = {
   blockPageMedia,
+  collectPostRequests,
+  crawlerBrowserPoolOptions,
   engageLottery,
   ensureLoggedIn,
   ensureLotterySchedule,
+  finishCrawlerProcess,
   isDrawTimeCompleted,
   isHourlyEngagementDue,
   nextHourlyLotteryRequest,
@@ -1351,6 +1367,7 @@ module.exports = {
   nextHourlyDelaySeconds,
   nextHourlyEngagementSecond,
   processPost,
+  processPostRequests,
   refreshLotterySchedules,
   rescheduleLotteryRequest,
   saveExistingEngagementMetadata,

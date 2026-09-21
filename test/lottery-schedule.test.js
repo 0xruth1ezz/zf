@@ -15,6 +15,7 @@ const {
   nextHourlyDelaySeconds,
   nextHourlyEngagementSecond,
   processPost,
+  processPostRequests,
   refreshLotterySchedules,
   rescheduleLotteryRequest,
   saveExistingEngagementMetadata,
@@ -328,4 +329,27 @@ test('the lottery timer polls independently and launches only its single-post wo
   `], { encoding: 'utf8', timeout: 5000 });
   assert.equal(discovery.status, 0, discovery.stderr);
   assert.deepEqual(discovery.stdout.trim().split('\n'), ['RUN:full', 'WAIT:300']);
+});
+
+test('discovery skips old untracked posts before navigation, but keeps tracked posts and unknown dates', async (t) => {
+  const store = createStore(t);
+  const now = localDate('2026-09-20T06:00:00');
+  t.mock.timers.enable({ apis: ['Date'], now: now.getTime() });
+  ensureLotterySchedule(store, lottery('tracked'), now);
+  const { page } = fakeLotteryPage();
+  const visited = [];
+  page.goto = async (url) => { visited.push(new URL(url).pathname.split('/').pop()); };
+  page.waitForLoadState = async () => {};
+  page.title = async () => 'Test lottery';
+  page.getByText = () => ({ first: () => ({ waitFor: async () => { throw new Error('No login link'); } }) });
+  const locator = page.locator;
+  page.locator = (selector) => selector === 'body'
+    ? { innerText: async () => '1小时前 从 web 发布\n抽奖\n开奖时间：2026-09-22 12:00' }
+    : locator(selector);
+  const requests = [['old', '2026.9.1'], ['tracked', '2026.9.1'], ['unknown', ''], ['recent', '1小时前']]
+    .map(([id, publishedText]) => ({ url: lottery(id).url, userData: { publishedText } }));
+  await processPostRequests(page, requests, store, { id: 'primary' });
+  assert.deepEqual(visited, ['tracked', 'unknown', 'recent']);
+  assert.equal(getLotterySchedule(store, 'primary', 'old'), undefined);
+  assert.ok(getLotterySchedule(store, 'primary', 'unknown'));
 });
