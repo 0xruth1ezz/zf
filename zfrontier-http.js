@@ -121,7 +121,12 @@ class ZfHttpClient {
     try { result = JSON.parse(text); } catch { throw new ZfError('ZF returned an unrecognized API response.'); }
     if (result.ok !== 0) {
       // The website also reports rate/verification failures with HTTP 200.
-      if (result.ok === 20001) this.blockedUntil = this.now() + 15 * 60000;
+      if (result.ok === 20001) {
+        this.blockedUntil = this.now() + 15 * 60000;
+        // ZF uses this code for stale signatures as well as rate limiting.
+        // Respect the cooldown, then retrieve a fresh token before retrying.
+        this.validatedDay = '';
+      }
       throw new ZfError(`ZF API rejected the request (code ${String(result.ok)}).`, { code: result.ok, rejected: true });
     }
     return result.data;

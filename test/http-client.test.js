@@ -106,3 +106,14 @@ test('uncertain POST delivery and redirects are not replayed or forwarded to ano
   assert.equal(f.requests.length, count);
   assert.ok(f.requests.every((r) => r.redirect === 'manual'));
 });
+
+test('cooldown expiry refreshes CSRF over HTTP before another attempt', async (t) => {
+  let reject = true;
+  const f = fixture(t, (r) => r.url.endsWith('/v2/signInfo') || !reject ? success() : json({ ok: 20001 }));
+  await assert.rejects(f.client.api('/v2/flow/reply'));
+  f.advance(15 * 60000);
+  reject = false;
+  await f.client.api('/v2/flow/reply');
+  assert.equal(f.requests.filter((r) => r.url.endsWith('/app/')).length, 2);
+  assert.equal(f.logins(), 1);
+});
