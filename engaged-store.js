@@ -38,6 +38,21 @@ function openEngagedStore(dbPath, htmlPath) {
       PRIMARY KEY (account_id, post_id)
     );
 
+    CREATE TABLE IF NOT EXISTS lottery_attempts (
+      account_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      hour_start INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      reply_id TEXT,
+      PRIMARY KEY (account_id, post_id, hour_start)
+    );
+    CREATE TABLE IF NOT EXISTS worker_lease (
+      name TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS daily_sign_ins (
       account_id TEXT NOT NULL,
       sign_in_date TEXT NOT NULL,

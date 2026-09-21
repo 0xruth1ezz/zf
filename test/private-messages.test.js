@@ -86,3 +86,43 @@ test('redirects and unrecognized inboxes retain data; a confirmed empty inbox cl
   await fetchPrivateMessages(page, store, 'a');
   assert.equal(listPrivateMessages(store).length, 0);
 });
+
+const { fetchPrivateMessagesHttp, readMessageHtml } = require('../private-messages');
+const htmlMessage = (id, unread = 0) => `<ul><li><a href="/my/mail/thread/${id}"><span class="nickname">Sender</span><span class="content">Message preview</span><span data-unread-count="${unread}"></span></a></li></ul>`;
+
+test('HTTP inbox pagination preserves unread state and commits only after every page succeeds', async (t) => {
+  const store = createStore(t);
+  const visited = [];
+  const client = { html: async (url) => {
+    visited.push(url);
+    return url.includes('page=2') ? htmlMessage('2') : htmlMessage('1', 3) + '<a rel="next" href="?page=2">Next</a>';
+  } };
+  assert.equal(await fetchPrivateMessagesHttp(client, store, 'a'), 2);
+  assert.deepEqual(visited, [MESSAGE_LIST_URL, `${MESSAGE_LIST_URL}?page=2`]);
+  assert.deepEqual(listPrivateMessages(store).map((m) => [m.messageId, m.unreadCount]), [['1', 3], ['2', 0]]);
+  client.html = async (url) => {
+    if (url.includes('page=2')) throw new Error('network failed');
+    return htmlMessage('3') + '<a rel="next" href="?page=2">Next</a>';
+  };
+  await assert.rejects(fetchPrivateMessagesHttp(client, store, 'a'), /network failed/);
+  assert.deepEqual(listPrivateMessages(store).map((m) => m.messageId), ['1', '2']);
+  for (const next of ['/my/mail/thread/3', 'https://other.test/my/mail/list', MESSAGE_LIST_URL]) {
+    client.html = async () => htmlMessage('3') + `<a rel="next" href="${next}">Next</a>`;
+    await assert.rejects(fetchPrivateMessagesHttp(client, store, 'a'), /pagination/);
+  }
+  client.html = async () => '<body>Please log in</body>';
+  await assert.rejects(fetchPrivateMessagesHttp(client, store, 'a'), /recognized/);
+  assert.equal(listPrivateMessages(store).length, 2);
+  client.html = async () => '<body>长官，您没有新私信</body>';
+  await fetchPrivateMessagesHttp(client, store, 'a');
+  assert.equal(listPrivateMessages(store).length, 0);
+});
+
+test('HTTP HTML parsing repairs nested links and excludes preview actions and external threads', () => {
+  const result = readMessageHtml(`<ul><a href="/my/mail/thread/123"><li class="unread"><div class="text-part">
+    <div class="row1"><span class="nickname">Alice</span><a class="user-verify-badge">Verified</a>: Message with <a href="/post">a link</a> &amp; details</div>
+    <div class="row2">2026/9/15 9:29<a class="text-bt">Delete</a><a class="text-bt" href="/my/mail/thread/123">View</a></div>
+    </div></li></a><li><a href="https://other.test/my/mail/thread/456">External</a></li></ul>`);
+  assert.deepEqual(result.messages, [{ messageId: '123', sender: 'Alice', preview: 'Message with a link & details',
+    sentAt: '2026/9/15 9:29', unreadCount: 1, url: 'https://www.zfrontier.com/my/mail/thread/123' }]);
+});

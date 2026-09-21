@@ -1,7 +1,7 @@
 {
   "name": "zf",
   "version": "1.0.0",
-  "description": "Crawlee + Playwright automation for zFrontier lottery posts.",
+  "description": "Scheduled zFrontier HTTP automation with Playwright session recovery.",
   "main": "zfrontier-lottery-crawler.js",
   "scripts": {
     "start": "node zfrontier-lottery-crawler.js",
@@ -15,7 +15,8 @@
     "serve:report": "npm run build:ui && cargo run --bin zfrontier-report-server",
     "test:node": "node --test",
     "check": "npm run build:ui && npm run check:node && npm run test:node && cargo test",
-    "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check private-messages.js && node --check view-engaged-lotteries.js"
+    "check:node": "node --check zfrontier-lottery-crawler.js && node --check engaged-store.js && node --check private-messages.js && node --check view-engaged-lotteries.js && node --check http-worker.js && node --check zfrontier-http.js && node --check browser-session.js",
+    "start:service": "node zfrontier-lottery-crawler.js --service"
   },
   "keywords": [],
   "author": "",
@@ -23,9 +24,12 @@
   "type": "commonjs",
   "dependencies": {
     "@apify/log": "2.5.40",
+    "cheerio": "^1.0.0-rc.12",
     "crawlee": "^3.16.0",
     "dotenv": "^17.4.2",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "tough-cookie": "^6.0.2",
+    "undici": "^7.29.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",

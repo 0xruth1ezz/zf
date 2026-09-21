@@ -3,19 +3,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
 process.env.ZF_SIGN_IN_TZ = 'Asia/Shanghai';
 const {
-  engageLottery,
   ensureLotterySchedule,
   isHourlyEngagementDue,
   nextHourlyLotteryRequest,
   loadTrackedActiveLotteryRequests,
   nextHourlyDelaySeconds,
   nextHourlyEngagementSecond,
-  processPost,
-  processPostRequests,
   refreshLotterySchedules,
   rescheduleLotteryRequest,
   saveExistingEngagementMetadata,
@@ -220,136 +216,4 @@ test('scheduler wakes early to prepare only the next post', (t) => {
   assert.equal(nextHourlyDelaySeconds([]), null);
   const afterDraw = localDate('2026-09-22T12:00:00');
   assert.equal(nextHourlyDelaySeconds(refreshLotterySchedules(store, afterDraw), afterDraw), null);
-});
-
-function fakeLotteryPage(onScroll = () => {}) {
-  const clicks = [];
-  const locator = (kind) => {
-    const value = {
-      first: () => value, filter: () => value, waitFor: async () => {},
-      scrollIntoViewIfNeeded: async () => onScroll(kind),
-      click: async () => { clicks.push(kind); },
-      innerText: async () => '参与成功',
-    };
-    return value;
-  };
-  return { clicks, page: {
-    locator: () => locator('lottery'), getByText: () => locator('confirm'),
-    evaluate: async () => false, waitForTimeout: async () => {},
-  } };
-}
-
-test('lottery and confirmation clicks recheck eligibility after browser waits', async () => {
-  for (const expiresAt of ['lottery', 'confirm']) {
-    let eligible = true;
-    const { page, clicks } = fakeLotteryPage((kind) => { if (kind === expiresAt) eligible = false; });
-    const result = await engageLottery(page, () => eligible);
-    assert.equal(result.engaged, false);
-    assert.deepEqual(clicks, expiresAt === 'lottery' ? [] : ['lottery']);
-  }
-  const { page, clicks } = fakeLotteryPage();
-  const result = await engageLottery(page, () => true);
-  assert.equal(result.engaged, true);
-  assert.ok(Number.isFinite(Date.parse(result.engagedAt)));
-  assert.deepEqual(clicks, ['lottery', 'confirm']);
-});
-
-test('discovery never participates; a single-post worker waits for its assigned time', async (t) => {
-  const store = createStore(t);
-  t.mock.timers.enable({ apis: ['Date'], now: localDate('2026-09-20T06:00:00').getTime() });
-  t.mock.method(Math, 'random', () => 0.5);
-  const { page, clicks } = fakeLotteryPage();
-  page.waitForTimeout = async (ms) => t.mock.timers.tick(ms);
-  const getByText = page.getByText;
-  page.getByText = (text) => text === '登录/注册'
-    ? { first: () => ({ waitFor: async () => { throw new Error('No login link'); } }) }
-    : getByText(text);
-  page.goto = async () => {};
-  page.waitForLoadState = async () => {};
-  page.title = async () => 'Test lottery';
-  const locator = page.locator;
-  let drawAt = '2026-09-22 12:00';
-  page.locator = (selector) => selector === 'body'
-    ? { innerText: async () => `1小时前 从 web 发布\n抽奖\n开奖时间：${drawAt}` }
-    : locator(selector);
-  const request = { url: lottery().url, userData: {} };
-  const account = { id: 'primary' };
-  await processPost(page, request, store, account);
-  assert.equal(clicks.length, 0);
-  assert.equal(getEngagement(store, 'primary', 'post'), undefined);
-  assert.equal(getLotterySchedule(store, 'primary', 'post').scheduledSecond, localSecond('2026-09-20T07:45:00'));
-
-  for (let index = 0; index < 3; index += 1) {
-    const schedule = getLotterySchedule(store, 'primary', 'post');
-    t.mock.timers.setTime(dateForSecond(schedule.scheduledSecond - 30).getTime());
-    const selected = nextHourlyLotteryRequest(store, new Set(['primary']));
-    assert.equal(selected.request.uniqueKey, 'post');
-    await processPost(page, request, store, account);
-    assert.equal(clicks.length, index * 2, 'feed discovery must never participate');
-    await processPost(page, selected.request, store, account);
-    const engagement = getEngagement(store, 'primary', 'post');
-    assert.equal(engagement.dailyEngagementCount, index + 1);
-    assert.equal(clicks.length, (index + 1) * 2);
-    const delay = new Date(engagement.engagedAt).getTime() - dateForSecond(schedule.scheduledSecond).getTime();
-    assert.ok(delay >= 0 && delay < 5000, 'participation follows this post’s timer');
-    await processPost(page, selected.request, store, account);
-    assert.equal(clicks.length, (index + 1) * 2);
-    rescheduleLotteryRequest(store, account.id, selected.request);
-  }
-
-  // A corrected draw time must also cancel the saved schedule, not cause retry wakeups.
-  drawAt = '2026-09-20 09:00';
-  await processPost(page, request, store, account);
-  assert.equal(getLotterySchedule(store, 'primary', 'post').scheduledSecond, null);
-  assert.equal(nextHourlyDelaySeconds(refreshLotterySchedules(store)), null);
-});
-
-test('the lottery timer polls independently and launches only its single-post worker', () => {
-  const entrypoint = fs.readFileSync(path.join(__dirname, '../docker/entrypoint.sh'), 'utf8');
-  const functions = entrypoint.slice(entrypoint.indexOf('run_crawler_once()'), entrypoint.indexOf('cleanup()'));
-  const result = spawnSync('bash', ['-c', `${functions}
-    LOTTERY_POLL_SECONDS=5
-    SECONDS=0
-    node() { if [ "$SECONDS" -lt 9 ]; then echo $((9 - SECONDS)); else echo 0; fi; }
-    sleep() { echo "WAIT:$1"; SECONDS=$((SECONDS + $1)); }
-    run_crawler_once() { echo "RUN:$1:$SECONDS"; exit 0; }
-    lottery_loop
-  `], { encoding: 'utf8', timeout: 5000 });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.stdout.trim().split('\n'), ['WAIT:5', 'WAIT:4', 'RUN:hourly:9']);
-
-  const discovery = spawnSync('bash', ['-c', `${functions}
-    CRAWL_INTERVAL_SECONDS=900
-    RUN_ON_START=1
-    SECONDS=0
-    node() { echo 'Unexpected lottery dispatch during discovery' >&2; exit 1; }
-    run_crawler_once() { echo "RUN:$1"; SECONDS=$((SECONDS + 600)); }
-    sleep() { echo "WAIT:$1"; exit 0; }
-    crawler_loop
-  `], { encoding: 'utf8', timeout: 5000 });
-  assert.equal(discovery.status, 0, discovery.stderr);
-  assert.deepEqual(discovery.stdout.trim().split('\n'), ['RUN:full', 'WAIT:300']);
-});
-
-test('discovery skips old untracked posts before navigation, but keeps tracked posts and unknown dates', async (t) => {
-  const store = createStore(t);
-  const now = localDate('2026-09-20T06:00:00');
-  t.mock.timers.enable({ apis: ['Date'], now: now.getTime() });
-  ensureLotterySchedule(store, lottery('tracked'), now);
-  const { page } = fakeLotteryPage();
-  const visited = [];
-  page.goto = async (url) => { visited.push(new URL(url).pathname.split('/').pop()); };
-  page.waitForLoadState = async () => {};
-  page.title = async () => 'Test lottery';
-  page.getByText = () => ({ first: () => ({ waitFor: async () => { throw new Error('No login link'); } }) });
-  const locator = page.locator;
-  page.locator = (selector) => selector === 'body'
-    ? { innerText: async () => '1小时前 从 web 发布\n抽奖\n开奖时间：2026-09-22 12:00' }
-    : locator(selector);
-  const requests = [['old', '2026.9.1'], ['tracked', '2026.9.1'], ['unknown', ''], ['recent', '1小时前']]
-    .map(([id, publishedText]) => ({ url: lottery(id).url, userData: { publishedText } }));
-  await processPostRequests(page, requests, store, { id: 'primary' });
-  assert.deepEqual(visited, ['tracked', 'unknown', 'recent']);
-  assert.equal(getLotterySchedule(store, 'primary', 'old'), undefined);
-  assert.ok(getLotterySchedule(store, 'primary', 'unknown'));
 });

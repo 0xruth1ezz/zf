@@ -82,3 +82,62 @@ async function fetchPrivateMessages(page, store, accountId) {
 }
 
 module.exports = { MESSAGE_LIST_URL, readMessageList, fetchPrivateMessages };
+
+function readMessageHtml(html) {
+  const $ = require('cheerio').load(html);
+  const compact = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const messages = new Map();
+  $('a[href*="/my/mail/thread/"]').each((_, element) => {
+    const link = $(element);
+    const url = new URL(link.attr('href'), MESSAGE_LIST_URL);
+    const match = url.pathname.match(/^\/my\/mail\/thread\/([^/]+)\/?$/);
+    if (url.origin !== new URL(MESSAGE_LIST_URL).origin || !match) return;
+    const closest = link.closest('li, tr, .mail-item, .message-item, .mail-thread');
+    const row = closest.length ? closest : link;
+    const sender = compact(row.find('.nickname, .user-name, .username, .sender').first().text()
+      || row.find('a[href*="/user/"]').first().text() || row.find('img[alt]').first().attr('alt'));
+    const latest = row.find('.text-part .row1').first().clone();
+    latest.find('.nickname, .user-verify-badge, .unread-count, .red-dot').remove();
+    const preview = latest.length ? compact(latest.text()).replace(/^[:：]\s*/, '')
+      : compact(row.find('.mail-content, .message-content, .content, .summary').first().text() || link.text());
+    let unread = row.find('[data-unread-count], .unread-count, .badge, .red-dot, .unread').first();
+    if (!unread.length && row.is('.unread, [data-unread="1"], [data-unread="true"]')) unread = row;
+    const countText = compact(unread.attr('data-unread-count') ?? unread.text());
+    const count = Number(countText);
+    const time = row.find('time, .time, .date, .created-at').first();
+    const metadata = row.find('.text-part .row2').first().clone();
+    metadata.find('.text-bt').remove();
+    url.hash = ''; url.search = '';
+    messages.set(match[1], { messageId: match[1], sender: sender || `User ${match[1]}`, preview, url: url.href,
+      sentAt: compact(time.attr('datetime') || time.text() || metadata.text()),
+      unreadCount: unread.length ? (Number.isSafeInteger(count) && count >= 0 && countText !== '' ? count : 1) : 0 });
+  });
+  const empty = /暂无私信|暂无消息|没有(?:新)?私信|还没有.*私信|No (?:private )?messages/i.test(compact($('body').text()));
+  const next = $('a[rel="next"], .pagination a, .pager a').toArray()
+    .find((element) => $(element).attr('rel') === 'next' || /^(下一页|下页|Next|›|»)$/i.test(compact($(element).text())));
+  return { messages: [...messages.values()], empty, next: next ? $(next).attr('href') : '' };
+}
+
+async function fetchPrivateMessagesHttp(client, store, accountId) {
+  const messages = new Map();
+  const visited = new Set();
+  let url = MESSAGE_LIST_URL;
+  while (url) {
+    if (visited.has(url) || visited.size >= 100) throw new Error('Private message pagination did not finish.');
+    visited.add(url);
+    const result = readMessageHtml(await client.html(url));
+    if (!result.messages.length && !result.empty) throw new Error('ZF private message list could not be recognized.');
+    result.messages.forEach((message) => messages.set(message.messageId, message));
+    if (!result.next || result.next === '#') break;
+    const next = new URL(result.next, url);
+    if (next.origin !== new URL(MESSAGE_LIST_URL).origin || !/^\/my\/mail\/list\/?$/.test(next.pathname)) {
+      throw new Error('Unexpected private message pagination link.');
+    }
+    next.hash = '';
+    url = next.href;
+  }
+  replacePrivateMessages(store, accountId, [...messages.values()]);
+  return messages.size;
+}
+module.exports.readMessageHtml = readMessageHtml;
+module.exports.fetchPrivateMessagesHttp = fetchPrivateMessagesHttp;
