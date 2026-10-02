@@ -23,12 +23,32 @@ export function isSnapshotMode() {
   return Boolean(bootstrapData?.isSnapshot);
 }
 
+function requireLogin(response) {
+  if (response.status !== 401) return;
+  const next = window.location.pathname + window.location.search + window.location.hash;
+  window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+  throw new Error('Please sign in to continue.');
+}
+
+export async function login(values) {
+  const response = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: new URLSearchParams(values),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'Unable to sign in. Please try again.');
+  }
+}
+
 export async function fetchDashboard() {
   if (bootstrapData?.isSnapshot) return bootstrapData;
 
   const response = await fetch('/api/dashboard', {
     headers: { Accept: 'application/json' },
   });
+  requireLogin(response);
   if (!response.ok) throw new Error(`Could not load crawler data (${response.status}).`);
   return response.json();
 }
@@ -42,6 +62,7 @@ async function submitAccount(path, values) {
     },
     body: new URLSearchParams(values),
   });
+  requireLogin(response);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Request failed (${response.status}).`);

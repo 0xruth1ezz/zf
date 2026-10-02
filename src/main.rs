@@ -9,6 +9,9 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod report_auth;
+use report_auth::ReportAuth;
+
 const APP_CSS: &str = include_str!("../dist/assets/app.css");
 const APP_JS: &str = include_str!("../dist/assets/app.js");
 
@@ -84,9 +87,9 @@ struct Config {
     report_auth: Option<ReportAuth>,
 }
 
-#[derive(Debug)]
-struct ReportAuth {
-    expected_header: String,
+struct ResponseWriter {
+    stream: TcpStream,
+    extra_headers: String,
 }
 
 #[derive(Debug)]
@@ -106,6 +109,8 @@ struct Request {
 fn main() -> std::io::Result<()> {
     let config = Config::load();
     ensure_schema(&config.db_path).expect("failed to initialize SQLite schema");
+    report_auth::initialize(&config.db_path, config.report_auth.as_ref())
+        .expect("failed to initialize report sessions");
 
     let listener = TcpListener::bind(&config.bind_addr)?;
     println!(
@@ -148,15 +153,78 @@ impl Config {
 
 fn handle_client(mut stream: TcpStream, config: &Config) -> std::io::Result<()> {
     let request = read_request(&mut stream)?;
-    let is_public_asset = matches!(
+    let mut stream = ResponseWriter {
+        stream,
+        extra_headers: String::new(),
+    };
+    let is_login_page = request.method == "GET" && request.path == "/login";
+    let is_public_route = matches!(
         (request.method.as_str(), request.path.as_str()),
-        ("GET", "/health") | ("GET", "/assets/app.css") | ("GET", "/assets/app.js")
+        ("GET", "/health")
+            | ("GET", "/assets/app.css")
+            | ("GET", "/assets/app.js")
+            | ("POST", "/api/login")
     );
-    if !is_public_asset && !is_authorized(&request, config.report_auth.as_ref()) {
-        return write_unauthorized(&mut stream);
+    if !is_public_route {
+        if let Some(auth) = config.report_auth.as_ref() {
+            match auth.authenticate(&request.headers, &config.db_path) {
+                Ok(Some(token)) => {
+                    stream.extra_headers = report_auth::cookie_header(&request.headers, &token);
+                }
+                Ok(None) if is_login_page => {}
+                Ok(None) => return write_unauthorized(&mut stream, &request),
+                Err(error) => {
+                    eprintln!("report session failed: {error}");
+                    return write_json_error(
+                        &mut stream,
+                        "500 Internal Server Error",
+                        "Unable to verify report session.",
+                    );
+                }
+            }
+        }
     }
 
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/login") => {
+            if config.report_auth.is_none() || !stream.extra_headers.is_empty() {
+                write_redirect(&mut stream, "/")
+            } else {
+                write_response(
+                    &mut stream,
+                    "200 OK",
+                    "text/html; charset=utf-8",
+                    &render_app_shell(),
+                )
+            }
+        }
+        ("POST", "/api/login") => {
+            let Some(auth) = config.report_auth.as_ref() else {
+                return write_json_value(&mut stream, "200 OK", &json!({ "ok": true }));
+            };
+            let form = parse_form_urlencoded(&request.body);
+            let user = form.get("username").map(String::as_str).unwrap_or("");
+            let password = form.get("password").map(String::as_str).unwrap_or("");
+            match auth.login(user, password, &config.db_path) {
+                Ok(Some(token)) => {
+                    stream.extra_headers = report_auth::cookie_header(&request.headers, &token);
+                    write_json_value(&mut stream, "200 OK", &json!({ "ok": true }))
+                }
+                Ok(None) => write_json_error(
+                    &mut stream,
+                    "401 Unauthorized",
+                    "Incorrect username or password.",
+                ),
+                Err(error) => {
+                    eprintln!("report login failed: {error}");
+                    write_json_error(
+                        &mut stream,
+                        "500 Internal Server Error",
+                        "Unable to sign in. Please try again.",
+                    )
+                }
+            }
+        }
         ("GET", "/health") => {
             write_response(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok\n")
         }
@@ -728,32 +796,29 @@ fn report_auth_from_env(dotenv: &HashMap<String, String>) -> Option<ReportAuth> 
     if user.is_empty() || password.is_empty() {
         return None;
     }
-    let credential = format!("{user}:{password}");
-    Some(ReportAuth {
-        expected_header: format!("Basic {}", base64_encode(credential.as_bytes())),
-    })
+    Some(ReportAuth::new(&user, &password))
 }
 
-fn is_authorized(request: &Request, auth: Option<&ReportAuth>) -> bool {
-    let Some(auth) = auth else {
-        return true;
-    };
-    header_value(&request.headers, "Authorization")
-        .map(|value| value.trim() == auth.expected_header)
-        .unwrap_or(false)
+fn write_unauthorized(stream: &mut ResponseWriter, request: &Request) -> std::io::Result<()> {
+    if request.method == "GET" && !request.path.starts_with("/api/") {
+        let next: String = request
+            .path
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                    (byte as char).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
+            .collect();
+        write_redirect(stream, &format!("/login?next={next}"))
+    } else {
+        write_json_error(stream, "401 Unauthorized", "Please sign in to continue.")
+    }
 }
 
-fn write_unauthorized(stream: &mut TcpStream) -> std::io::Result<()> {
-    write_response_with_extra_headers(
-        stream,
-        "401 Unauthorized",
-        "text/plain; charset=utf-8",
-        "authentication required\n",
-        "WWW-Authenticate: Basic realm=\"zFrontier report\", charset=\"UTF-8\"\r\n",
-    )
-}
-
-fn write_redirect(stream: &mut TcpStream, location: &str) -> std::io::Result<()> {
+fn write_redirect(stream: &mut ResponseWriter, location: &str) -> std::io::Result<()> {
     write_response_with_extra_headers(
         stream,
         "303 See Other",
@@ -764,7 +829,7 @@ fn write_redirect(stream: &mut TcpStream, location: &str) -> std::io::Result<()>
 }
 
 fn write_json<T: Serialize>(
-    stream: &mut TcpStream,
+    stream: &mut ResponseWriter,
     status: &str,
     value: &T,
 ) -> std::io::Result<()> {
@@ -774,19 +839,23 @@ fn write_json<T: Serialize>(
 }
 
 fn write_json_value(
-    stream: &mut TcpStream,
+    stream: &mut ResponseWriter,
     status: &str,
     value: &serde_json::Value,
 ) -> std::io::Result<()> {
     write_json(stream, status, value)
 }
 
-fn write_json_error(stream: &mut TcpStream, status: &str, message: &str) -> std::io::Result<()> {
+fn write_json_error(
+    stream: &mut ResponseWriter,
+    status: &str,
+    message: &str,
+) -> std::io::Result<()> {
     write_json_value(stream, status, &json!({ "error": message }))
 }
 
 fn write_response(
-    stream: &mut TcpStream,
+    stream: &mut ResponseWriter,
     status: &str,
     content_type: &str,
     body: &str,
@@ -795,17 +864,18 @@ fn write_response(
 }
 
 fn write_response_with_extra_headers(
-    stream: &mut TcpStream,
+    stream: &mut ResponseWriter,
     status: &str,
     content_type: &str,
     body: &str,
     extra_headers: &str,
 ) -> std::io::Result<()> {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{extra_headers}Connection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{}{extra_headers}Connection: close\r\n\r\n{body}",
+        body.len(),
+        stream.extra_headers,
     );
-    stream.write_all(response.as_bytes())
+    stream.stream.write_all(response.as_bytes())
 }
 
 fn base64_encode(input: &[u8]) -> String {
@@ -933,6 +1003,366 @@ fn normalize_account_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestServer {
+        config: Config,
+    }
+
+    impl TestServer {
+        fn new(auth: Option<ReportAuth>) -> Self {
+            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let db_path = env::temp_dir().join(format!(
+                "zf-report-auth-{}-{timestamp}-{id}.sqlite",
+                std::process::id()
+            ));
+            ensure_schema(&db_path).unwrap();
+            report_auth::initialize(&db_path, auth.as_ref()).unwrap();
+            Self {
+                config: Config {
+                    bind_addr: "127.0.0.1:0".to_string(),
+                    db_path,
+                    report_auth: auth,
+                },
+            }
+        }
+
+        fn restart(&mut self, auth: Option<ReportAuth>) {
+            self.config.report_auth = auth;
+            report_auth::initialize(&self.config.db_path, self.config.report_auth.as_ref())
+                .unwrap();
+        }
+
+        fn request(&self, method: &str, path: &str, headers: &str, body: &str) -> String {
+            let listener = TcpListener::bind(&self.config.bind_addr).unwrap();
+            std::thread::scope(|scope| {
+                let server = scope.spawn(|| {
+                    let (stream, _) = listener.accept().unwrap();
+                    handle_client(stream, &self.config).unwrap();
+                });
+                let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+                client
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                write!(
+                    client,
+                    "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Content-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                let mut response = String::new();
+                client.read_to_string(&mut response).unwrap();
+                server.join().unwrap();
+                response
+            })
+        }
+
+        fn login(&self) -> String {
+            let response = self.request(
+                "POST",
+                "/api/login",
+                "",
+                "username=operator&password=secret",
+            );
+            assert!(response.starts_with("HTTP/1.1 200 OK"));
+            saved_cookie(&response)
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.config.db_path);
+        }
+    }
+
+    fn basic_header(user: &str, password: &str) -> String {
+        format!(
+            "Authorization: Basic {}\r\n",
+            base64_encode(format!("{user}:{password}").as_bytes())
+        )
+    }
+
+    fn saved_cookie(response: &str) -> String {
+        header_value(response, "Set-Cookie")
+            .expect("successful authentication must set a persistent cookie")
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn report_login_survives_new_connections_and_server_restart() {
+        let mut server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        let cookie = server.login();
+        let other_cookie = server.login();
+        assert_ne!(
+            cookie, other_cookie,
+            "each browser gets an independent token"
+        );
+
+        server.restart(Some(ReportAuth::new("operator", "secret")));
+        let response = server.request("GET", "/login", &format!("Cookie: {cookie}\r\n"), "");
+        assert!(response.starts_with("HTTP/1.1 303 See Other"));
+        assert_eq!(header_value(&response, "Location"), Some("/"));
+        assert_eq!(saved_cookie(&response), cookie);
+        for path in ["/", "/accounts", "/messages", "/api/dashboard"] {
+            // No Authorization header or browser Basic Auth cache is needed.
+            let response = server.request(
+                "GET",
+                path,
+                &format!("Cookie: theme=light; {cookie}\r\n"),
+                "",
+            );
+            assert!(
+                response.starts_with("HTTP/1.1 200 OK"),
+                "{path}: {response}"
+            );
+            assert_eq!(saved_cookie(&response), cookie);
+            let set_cookie = header_value(&response, "Set-Cookie").unwrap();
+            for attribute in ["Path=/", "Max-Age=34560000", "HttpOnly", "SameSite=Lax"] {
+                assert!(set_cookie.contains(attribute));
+            }
+        }
+
+        let headers = format!("Cookie: {cookie}\r\n");
+        let response = server.request(
+            "POST",
+            "/api/accounts",
+            &headers,
+            "id=test&phone=123&password=test",
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(load_accounts(&server.config.db_path).unwrap().len(), 1);
+        assert_eq!(saved_cookie(&response), cookie);
+        let response = server.request("POST", "/config/accounts/delete", &headers, "id=test");
+        assert!(response.starts_with("HTTP/1.1 303 See Other"));
+        assert_eq!(saved_cookie(&response), cookie);
+        assert!(load_accounts(&server.config.db_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn report_rejects_missing_wrong_and_forged_credentials() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        let cookie = server.login();
+        let invalid_headers = [
+            String::new(),
+            basic_header("operator", "wrong"),
+            "Cookie: zf_report_session=forged\r\n".to_string(),
+            format!("Cookie: {cookie}tampered\r\n"),
+            format!("Cookie: prefix_{cookie}\r\n"),
+        ];
+        for headers in invalid_headers {
+            for (method, path, body) in [
+                ("GET", "/api/dashboard", ""),
+                ("POST", "/api/accounts", "id=test&phone=123&password=test"),
+            ] {
+                let response = server.request(method, path, &headers, body);
+                assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+                assert!(header_value(&response, "WWW-Authenticate").is_none());
+                assert!(header_value(&response, "Set-Cookie").is_none());
+            }
+        }
+        assert!(load_accounts(&server.config.db_path).unwrap().is_empty());
+
+        let response = server.request(
+            "GET",
+            "/",
+            &format!(
+                "Cookie: zf_report_session=stale\r\n{}",
+                basic_header("operator", "secret")
+            ),
+            "",
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert_ne!(saved_cookie(&response), "zf_report_session=stale");
+    }
+
+    #[test]
+    fn report_sessions_renew_expire_and_store_only_token_hashes() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        let cookie = server.login();
+        let conn = Connection::open(&server.config.db_path).unwrap();
+        let stored_hash: String = conn
+            .query_row("SELECT token_hash FROM report_auth_sessions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_hash.len(), 64);
+        assert!(!cookie.contains(&stored_hash));
+        conn.execute(
+            "UPDATE report_auth_sessions SET expires_at = unixepoch() + 60",
+            [],
+        )
+        .unwrap();
+        let headers = format!("Cookie: {cookie}\r\n");
+        let response = server.request("GET", "/", &headers, "");
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT expires_at - unixepoch() FROM report_auth_sessions",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(remaining > 399 * 24 * 60 * 60);
+
+        conn.execute(
+            "UPDATE report_auth_sessions SET expires_at = unixepoch() - 1",
+            [],
+        )
+        .unwrap();
+        let response = server.request("GET", "/api/dashboard", &headers, "");
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(header_value(&response, "Set-Cookie").is_none());
+    }
+
+    #[test]
+    fn report_credential_changes_revoke_sessions_permanently() {
+        for changed_auth in [
+            Some(ReportAuth::new("operator", "changed")),
+            Some(ReportAuth::new("other", "secret")),
+            None,
+        ] {
+            let mut server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+            let cookie = server.login();
+            server.restart(changed_auth);
+            if server.config.report_auth.is_some() {
+                let response = server.request(
+                    "GET",
+                    "/api/dashboard",
+                    &format!("Cookie: {cookie}\r\n"),
+                    "",
+                );
+                assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+            }
+            server.restart(Some(ReportAuth::new("operator", "secret")));
+            let response = server.request(
+                "GET",
+                "/api/dashboard",
+                &format!("Cookie: {cookie}\r\n"),
+                "",
+            );
+            assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+            server.login();
+        }
+    }
+
+    #[test]
+    fn report_cookies_support_http_and_https_proxy() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        for (proto, secure) in [
+            ("", false),
+            ("http", false),
+            ("https", true),
+            ("HTTPS, http", true),
+            ("http, https", false),
+        ] {
+            let response = server.request(
+                "GET",
+                "/",
+                &format!(
+                    "X-Forwarded-Proto: {proto}\r\n{}",
+                    basic_header("operator", "secret")
+                ),
+                "",
+            );
+            let set_cookie = header_value(&response, "Set-Cookie").unwrap();
+            assert_eq!(set_cookie.contains("; Secure"), secure);
+        }
+    }
+
+    #[test]
+    fn report_public_routes_and_disabled_auth_do_not_set_cookies() {
+        let mut server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        for path in ["/health", "/assets/app.js", "/assets/app.css", "/login"] {
+            let response = server.request("GET", path, "", "");
+            assert!(response.starts_with("HTTP/1.1 200 OK"));
+            assert!(header_value(&response, "Set-Cookie").is_none());
+        }
+        server.restart(None);
+        let response = server.request("GET", "/api/dashboard", "", "");
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(header_value(&response, "Set-Cookie").is_none());
+    }
+
+    #[test]
+    fn report_session_storage_failure_fails_closed() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        let cookie = server.login();
+        Connection::open(&server.config.db_path)
+            .unwrap()
+            .execute("DROP TABLE report_auth_sessions", [])
+            .unwrap();
+        let response = server.request(
+            "GET",
+            "/api/dashboard",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        );
+        assert!(response.starts_with("HTTP/1.1 500 Internal Server Error"));
+        assert!(header_value(&response, "Set-Cookie").is_none());
+        assert!(!response.contains("\"accounts\""));
+    }
+
+    #[test]
+    fn report_pages_redirect_to_login_without_a_browser_prompt() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        for path in ["/", "/accounts", "/messages"] {
+            let response = server.request("GET", path, "", "");
+            assert!(response.starts_with("HTTP/1.1 303 See Other"));
+            assert_eq!(
+                header_value(&response, "Location").unwrap(),
+                format!("/login?next=%2F{}", &path[1..])
+            );
+            assert!(header_value(&response, "WWW-Authenticate").is_none());
+        }
+        let response = server.request("GET", "/login?next=%2Faccounts", "", "");
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("/assets/app.js"));
+        assert!(header_value(&response, "WWW-Authenticate").is_none());
+    }
+
+    #[test]
+    fn report_login_form_rejects_invalid_credentials_without_setting_a_cookie() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        for body in [
+            "",
+            "username=operator",
+            "username=wrong&password=secret",
+            "username=operator&password=wrong",
+        ] {
+            let response = server.request("POST", "/api/login", "", body);
+            assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+            assert!(response.contains("Incorrect username or password."));
+            assert!(header_value(&response, "WWW-Authenticate").is_none());
+            assert!(header_value(&response, "Set-Cookie").is_none());
+        }
+    }
+
+    #[test]
+    fn report_login_form_preserves_password_spaces_and_special_characters() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", " p+&=密碼 ")));
+        let response = server.request(
+            "POST",
+            "/api/login",
+            "",
+            "username=operator&password=+p%2B%26%3D%E5%AF%86%E7%A2%BC+",
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        let cookie = saved_cookie(&response);
+        let response = server.request(
+            "GET",
+            "/api/dashboard",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+    }
 
     #[test]
     fn parses_form_values_and_normalizes_account_ids() {

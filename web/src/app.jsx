@@ -7,6 +7,7 @@ import { Button } from './components/ui/button';
 import { ActivityPage } from './pages/activity-page';
 import { AccountsPage } from './pages/accounts-page';
 import { MessagesPage } from './pages/messages-page';
+import { LoginPage } from './pages/login-page';
 import { fetchDashboard, isSnapshotMode } from './data';
 
 function subscribeToRoute(callback) {
@@ -61,6 +62,11 @@ function ErrorState({ error, onRetry }) {
 }
 
 export function App() {
+  if (window.location.pathname === '/login') return <LoginPage />;
+  return <Workspace />;
+}
+
+function Workspace() {
   const route = useRoute();
   const dashboard = useQuery({
     queryKey: ['dashboard'],
