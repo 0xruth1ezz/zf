@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
+import type { MessageSyncStatus, PrivateMessage } from '../types';
+import type { FilteredPageProps } from '../lib/url-filters';
 import { ExternalLink, Mail, SlidersHorizontal } from 'lucide-react';
 import { AccountBadge } from '../components/account-badge';
 import { Badge } from '../components/ui/badge';
@@ -12,7 +14,24 @@ import { formatDateTime } from '../data';
 
 const PAGE_SIZE = 20;
 
-function MessageEmptyState({ hasAccounts, hasMessages, search, unreadOnly, sync, onReset }) {
+interface AccountSyncStatus extends MessageSyncStatus {
+  enabled?: boolean;
+}
+
+interface InboxStatus extends AccountSyncStatus {
+  conversationCount: number;
+}
+
+interface MessageEmptyStateProps {
+  hasAccounts: boolean;
+  hasMessages: boolean;
+  search: string;
+  unreadOnly: boolean;
+  sync: InboxStatus[];
+  onReset: () => void;
+}
+
+function MessageEmptyState({ hasAccounts, hasMessages, search, unreadOnly, sync, onReset }: MessageEmptyStateProps) {
   const hasFilters = Boolean(search || unreadOnly);
   const allDisabled = sync.length > 0 && sync.every((status) => status.enabled === false);
   const hasFetchError = sync.some((status) => status.enabled !== false && status.error);
@@ -53,7 +72,7 @@ function MessageEmptyState({ hasAccounts, hasMessages, search, unreadOnly, sync,
   );
 }
 
-function MessageList({ messages }) {
+function MessageList({ messages }: { messages: PrivateMessage[] }) {
   return (
     <div className="rounded-lg border border-border bg-card">
       <div aria-hidden="true" className="hidden grid-cols-[104px_minmax(0,1fr)_152px_16px] items-center gap-4 border-b border-border bg-muted/65 px-3 py-3 text-xs font-semibold text-muted-foreground lg:grid">
@@ -92,7 +111,7 @@ function MessageList({ messages }) {
   );
 }
 
-function MessageSync({ sync }) {
+function MessageSync({ sync }: { sync: InboxStatus[] }) {
   if (sync.length === 0) return null;
 
   return (
@@ -122,17 +141,14 @@ function MessageSync({ sync }) {
   );
 }
 
-export function MessagesPage({ data }) {
-  const [page, setPage] = useState(0);
-  const [account, setAccount] = useState('all');
-  const [search, setSearch] = useState('');
-  const [unreadOnly, setUnreadOnly] = useState(false);
+export function MessagesPage({ data, filters, setFilters, accountIds }: FilteredPageProps) {
+  const { account, messagesSearch: search, unreadOnly } = filters;
   const messages = data.messages || [];
-  const conversationCounts = new Map();
+  const conversationCounts = new Map<string, number>();
   for (const message of messages) {
     conversationCounts.set(message.accountId, (conversationCounts.get(message.accountId) || 0) + 1);
   }
-  const syncByAccount = new Map((data.messageSync || []).map((status) => [status.accountId, status]));
+  const syncByAccount = new Map<string, AccountSyncStatus>((data.messageSync || []).map((status) => [status.accountId, status]));
   for (const account of data.accounts || []) {
     syncByAccount.set(account.id, {
       accountId: account.id,
@@ -145,7 +161,6 @@ export function MessagesPage({ data }) {
   const sync = [...syncByAccount.values()]
     .map((status) => ({ ...status, conversationCount: conversationCounts.get(status.accountId) || 0 }))
     .sort((left, right) => left.accountId.localeCompare(right.accountId));
-  const accountIds = [...new Set([...sync.map((status) => status.accountId), ...messages.map((message) => message.accountId)])].sort();
   const normalizedSearch = search.trim().toLowerCase();
   const accountMessages = messages.filter((message) => account === 'all' || message.accountId === account);
   const filteredMessages = accountMessages.filter((message) => (
@@ -155,14 +170,17 @@ export function MessagesPage({ data }) {
   const filteredSync = sync.filter((status) => account === 'all' || status.accountId === account);
   const fetchErrors = filteredSync.filter((status) => status.enabled !== false && status.error).length;
   const unreadCount = filteredMessages.reduce((count, message) => count + message.unreadCount, 0);
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(filteredMessages.length / PAGE_SIZE) - 1));
+  const currentPage = Math.min(filters.messagesPage, Math.max(1, Math.ceil(filteredMessages.length / PAGE_SIZE))) - 1;
   const rows = filteredMessages.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
+  useEffect(() => {
+    if (filters.messagesPage !== currentPage + 1) {
+      setFilters({ messagesPage: currentPage + 1 }, { replace: true });
+    }
+  }, [filters.messagesPage, currentPage, setFilters]);
+
   function clearFilters() {
-    setAccount('all');
-    setSearch('');
-    setUnreadOnly(false);
-    setPage(0);
+    setFilters({ account: 'all', messagesSearch: '', unreadOnly: false, messagesPage: 1 });
   }
 
   return (
@@ -174,17 +192,17 @@ export function MessagesPage({ data }) {
             aria-label="Search messages"
             label="Search"
             inputClassName="placeholder:text-muted-foreground"
-            onChange={(value) => { setSearch(value); setPage(0); }}
+            onChange={(value) => setFilters({ messagesSearch: value }, { replace: true })}
             placeholder="Sender, message, account…"
             value={search}
           />
-          <Select label="Account" selectedKey={account} onSelectionChange={(key) => { setAccount(String(key)); setPage(0); }}>
+          <Select label="Account" selectedKey={account} onSelectionChange={(key) => { if (key !== null) setFilters({ account: String(key) }); }}>
             <SelectItem id="all">All accounts</SelectItem>
             {accountIds.map((id) => <SelectItem key={id} id={id}>{id}</SelectItem>)}
           </Select>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-          <Switch isSelected={unreadOnly} onChange={(value) => { setUnreadOnly(value); setPage(0); }}>Unread only</Switch>
+          <Switch isSelected={unreadOnly} onChange={(value) => setFilters({ unreadOnly: value })}>Unread only</Switch>
           <Button onPress={clearFilters} size="sm" variant="ghost">
             <SlidersHorizontal aria-hidden="true" /> Reset
           </Button>
@@ -210,7 +228,7 @@ export function MessagesPage({ data }) {
         ) : (
           <>
             <MessageList messages={rows} />
-            <Pagination label="Private messages" page={currentPage} onPageChange={setPage} pageSize={PAGE_SIZE} total={filteredMessages.length} />
+            <Pagination label="Private messages" page={currentPage} onPageChange={(page) => setFilters({ messagesPage: page + 1 })} pageSize={PAGE_SIZE} total={filteredMessages.length} />
           </>
         )}
       </section>

@@ -102,6 +102,7 @@ struct TableColumn {
 struct Request {
     method: String,
     path: String,
+    target: String,
     headers: String,
     body: String,
 }
@@ -361,6 +362,7 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
     Ok(Request {
         method,
         path,
+        target: target.to_string(),
         headers,
         body,
     })
@@ -802,7 +804,7 @@ fn report_auth_from_env(dotenv: &HashMap<String, String>) -> Option<ReportAuth> 
 fn write_unauthorized(stream: &mut ResponseWriter, request: &Request) -> std::io::Result<()> {
     if request.method == "GET" && !request.path.starts_with("/api/") {
         let next: String = request
-            .path
+            .target
             .bytes()
             .map(|byte| {
                 if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
@@ -1325,6 +1327,22 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("/assets/app.js"));
         assert!(header_value(&response, "WWW-Authenticate").is_none());
+    }
+
+    #[test]
+    fn report_login_redirect_preserves_query_filters() {
+        let server = TestServer::new(Some(ReportAuth::new("operator", "secret")));
+        for target in [
+            "/?account=a&messagesSearch=hello%20world&unreadOnly=1",
+            "/activity?activityTab=sign-ins&signInPage=2",
+            "/messages?account=b&messagesPage=3",
+        ] {
+            let response = server.request("GET", target, "", "");
+            assert!(response.starts_with("HTTP/1.1 303 See Other"));
+            let location = header_value(&response, "Location").unwrap();
+            let next = location.strip_prefix("/login?next=").unwrap();
+            assert_eq!(percent_decode(next), target);
+        }
     }
 
     #[test]

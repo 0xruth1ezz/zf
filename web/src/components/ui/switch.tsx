@@ -1,7 +1,13 @@
-import { Switch as AriaSwitch } from 'react-aria-components';
+import type { ReactNode } from 'react';
+import { Switch as AriaSwitch, type SwitchProps as AriaSwitchProps } from 'react-aria-components';
 import { cn } from '../../lib/utils';
 
-export function Switch({ children, className, ...props }) {
+interface SwitchProps extends Omit<AriaSwitchProps, 'children' | 'className'> {
+  children: ReactNode;
+  className?: string;
+}
+
+export function Switch({ children, className, ...props }: SwitchProps) {
   return (
     <AriaSwitch
       {...props}

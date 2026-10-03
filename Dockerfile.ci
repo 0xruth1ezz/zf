@@ -10,7 +10,7 @@ ENV BUILD_VERSION=${BUILD_VERSION}
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --include=dev
 
-COPY index.html vite.config.mjs components.json ./
+COPY index.html vite.config.mjs components.json tsconfig.json ./
 COPY web ./web
 RUN npm run build:ui
 

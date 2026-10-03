@@ -1,3 +1,5 @@
+import type { AccountFormValues, DashboardPayload, LoginValues } from './types';
+
 const bootstrapData = globalThis.window?.__ZF_INITIAL_DATA__;
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -23,26 +25,31 @@ export function isSnapshotMode() {
   return Boolean(bootstrapData?.isSnapshot);
 }
 
-function requireLogin(response) {
+function requireLogin(response: Response) {
   if (response.status !== 401) return;
   const next = window.location.pathname + window.location.search + window.location.hash;
   window.location.replace(`/login?next=${encodeURIComponent(next)}`);
   throw new Error('Please sign in to continue.');
 }
 
-export async function login(values) {
+async function responseError(response: Response, fallback: string): Promise<string> {
+  const payload: unknown = await response.json().catch(() => null);
+  return typeof payload === 'object' && payload !== null && 'error' in payload
+    && typeof payload.error === 'string' && payload.error ? payload.error : fallback;
+}
+
+export async function login(values: LoginValues): Promise<void> {
   const response = await fetch('/api/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-    body: new URLSearchParams(values),
+    body: new URLSearchParams({ ...values }),
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || 'Unable to sign in. Please try again.');
+    throw new Error(await responseError(response, 'Unable to sign in. Please try again.'));
   }
 }
 
-export async function fetchDashboard() {
+export async function fetchDashboard(): Promise<DashboardPayload> {
   if (bootstrapData?.isSnapshot) return bootstrapData;
 
   const response = await fetch('/api/dashboard', {
@@ -50,10 +57,10 @@ export async function fetchDashboard() {
   });
   requireLogin(response);
   if (!response.ok) throw new Error(`Could not load crawler data (${response.status}).`);
-  return response.json();
+  return response.json() as Promise<DashboardPayload>;
 }
 
-async function submitAccount(path, values) {
+async function submitAccount(path: string, values: Record<string, string>): Promise<unknown> {
   const response = await fetch(path, {
     method: 'POST',
     headers: {
@@ -64,28 +71,32 @@ async function submitAccount(path, values) {
   });
   requireLogin(response);
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `Request failed (${response.status}).`);
+    throw new Error(await responseError(response, `Request failed (${response.status}).`));
   }
   return response.json();
 }
 
-export function saveAccount(values) {
-  return submitAccount('/api/accounts', values);
+export function saveAccount(values: AccountFormValues) {
+  return submitAccount('/api/accounts', {
+    id: values.id,
+    phone: values.phone,
+    password: values.password,
+    ...(values.enabled ? { enabled: values.enabled } : {}),
+  });
 }
 
-export function deleteAccount(id) {
+export function deleteAccount(id: string) {
   return submitAccount('/api/accounts/delete', { id });
 }
 
-export function formatDateTime(value) {
+export function formatDateTime(value: string) {
   if (!value) return 'Not recorded';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return dateTimeFormatter.format(date);
 }
 
-export function formatDrawTime(value) {
+export function formatDrawTime(value: string) {
   if (!value) return 'Unknown';
   const normalized = value.trim().replace(/[/.]/g, '-').replace('T', ' ');
   const match = normalized.match(/^(20\d{2})-(\d{1,2})-(\d{1,2}) +(\d{1,2}):(\d{2})/);
@@ -104,7 +115,7 @@ export function chinaDateKey() {
   return chinaDateFormatter.format(new Date());
 }
 
-export function humanizeStatus(value) {
+export function humanizeStatus(value: string) {
   return String(value || 'unknown')
     .split('_')
     .filter(Boolean)
@@ -112,7 +123,7 @@ export function humanizeStatus(value) {
     .join(' ');
 }
 
-export function statusVariant(value) {
+export function statusVariant(value: string) {
   const normalized = String(value || '').toLowerCase();
   if (['signed', 'already_signed', 'success'].includes(normalized)) return 'success';
   if (normalized === 'clicked') return 'info';

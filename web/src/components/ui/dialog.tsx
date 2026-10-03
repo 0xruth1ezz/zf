@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import {
   Dialog as AriaDialog,
@@ -5,13 +6,22 @@ import {
   Heading,
   Modal,
   ModalOverlay,
+  type ModalOverlayProps,
+  type DialogRenderProps,
 } from 'react-aria-components';
 import { cn } from '../../lib/utils';
 import { Button } from './button';
 
 export { DialogTrigger };
 
-export function Dialog({ title, description, children, className, ...props }) {
+interface DialogProps extends Omit<ModalOverlayProps, 'children' | 'className' | 'title'> {
+  title: ReactNode;
+  description?: ReactNode;
+  children: ReactNode | ((props: DialogRenderProps) => ReactNode);
+  className?: string;
+}
+
+export function Dialog({ title, description, children, className, ...props }: DialogProps) {
   return (
     <ModalOverlay
       {...props}

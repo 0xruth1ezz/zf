@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+import type { Route } from '../types';
 import { Activity, Mail, RefreshCw, Settings2, Wifi, WifiOff } from 'lucide-react';
 import { Link } from 'react-aria-components';
 import { Button } from './ui/button';
@@ -11,7 +13,16 @@ const navigation = [
   { id: 'accounts', label: 'Accounts', icon: Settings2 },
 ];
 
-export function AppShell({ route, onRefresh, isRefreshing, updatedAt, unreadCount = 0, children }) {
+interface AppShellProps {
+  route: Route;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+  updatedAt: string;
+  unreadCount?: number;
+  children: ReactNode;
+}
+
+export function AppShell({ route, onRefresh, isRefreshing, updatedAt, unreadCount = 0, children }: AppShellProps) {
   const snapshot = isSnapshotMode();
 
   return (

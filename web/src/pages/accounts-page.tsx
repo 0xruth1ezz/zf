@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
+import type { AccountConfig, AccountFormValues, DashboardPayload } from '../types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Database, KeyRound, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { AccountBadge } from '../components/account-badge';
@@ -10,7 +11,12 @@ import { Switch } from '../components/ui/switch';
 import { PageHeader } from '../components/page-header';
 import { deleteAccount, formatDateTime, isSnapshotMode, saveAccount } from '../data';
 
-function formValues(form) {
+interface AccountFormProps {
+  readOnly: boolean;
+  onNotice: (message: string) => void;
+}
+
+function formValues(form: HTMLFormElement): AccountFormValues {
   const data = new FormData(form);
   return {
     id: String(data.get('id') || ''),
@@ -20,7 +26,13 @@ function formValues(form) {
   };
 }
 
-function DeleteAccountDialog({ accountId, isDisabled, onDeleted }) {
+interface DeleteAccountDialogProps {
+  accountId: string;
+  isDisabled: boolean;
+  onDeleted: (message: string) => void;
+}
+
+function DeleteAccountDialog({ accountId, isDisabled, onDeleted }: DeleteAccountDialogProps) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => deleteAccount(accountId),
@@ -61,7 +73,7 @@ function DeleteAccountDialog({ accountId, isDisabled, onDeleted }) {
   );
 }
 
-function AccountRow({ account, readOnly, onNotice }) {
+function AccountRow({ account, readOnly, onNotice }: AccountFormProps & { account: AccountConfig }) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: saveAccount,
@@ -71,7 +83,7 @@ function AccountRow({ account, readOnly, onNotice }) {
     },
   });
 
-  function handleSubmit(event) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     mutation.mutate(formValues(event.currentTarget));
   }
@@ -112,7 +124,7 @@ function AccountRow({ account, readOnly, onNotice }) {
   );
 }
 
-function AddAccountForm({ readOnly, onNotice }) {
+function AddAccountForm({ readOnly, onNotice }: AccountFormProps) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: saveAccount,
@@ -122,7 +134,7 @@ function AddAccountForm({ readOnly, onNotice }) {
     },
   });
 
-  function handleSubmit(event) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     mutation.mutate(formValues(form), {
@@ -156,7 +168,7 @@ function AddAccountForm({ readOnly, onNotice }) {
   );
 }
 
-export function AccountsPage({ data }) {
+export function AccountsPage({ data }: { data: DashboardPayload }) {
   const [notice, setNotice] = useState('');
   const readOnly = isSnapshotMode();
 

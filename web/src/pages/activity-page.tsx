@@ -1,4 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
+import type { SortDescriptor, SortDirection } from 'react-aria-components';
+import type { DashboardPayload, LotteryRecord, SignInRecord } from '../types';
+import type { FilteredPageProps } from '../lib/url-filters';
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Filter, SlidersHorizontal } from 'lucide-react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import { AccountBadge } from '../components/account-badge';
@@ -27,16 +30,15 @@ import {
 } from '../data';
 
 const PAGE_SIZE = 20;
-const DEFAULT_SORT_DESCRIPTOR = { column: 'engagedAt', direction: 'descending' };
 
-function compareOptional(left, right, ascending) {
+function compareOptional(left: string, right: string, ascending: boolean) {
   if (left && right) return ascending ? left.localeCompare(right) : right.localeCompare(left);
   if (left) return -1;
   if (right) return 1;
   return 0;
 }
 
-function SortableHeader({ children, sortDirection }) {
+function SortableHeader({ children, sortDirection }: { children: ReactNode; sortDirection?: SortDirection }) {
   const SortIcon = sortDirection === 'ascending'
     ? ArrowUp
     : sortDirection === 'descending'
@@ -54,7 +56,13 @@ function SortableHeader({ children, sortDirection }) {
   );
 }
 
-function EmptyState({ title, description, onReset }) {
+interface EmptyStateProps {
+  title: string;
+  description: string;
+  onReset?: () => void;
+}
+
+function EmptyState({ title, description, onReset }: EmptyStateProps) {
   return (
     <div className="grid min-h-52 place-items-center rounded-lg border border-dashed border-border bg-muted/25 px-6 py-10 text-center">
       <div className="max-w-sm">
@@ -69,7 +77,7 @@ function EmptyState({ title, description, onReset }) {
   );
 }
 
-function Summary({ accounts, records, signIns, generatedAt }) {
+function Summary({ accounts, records, signIns, generatedAt }: Pick<DashboardPayload, 'accounts' | 'records' | 'signIns' | 'generatedAt'>) {
   const enabled = accounts.filter((account) => account.enabled).length;
   const today = chinaDateKey();
   const signedToday = signIns.filter((item) => item.signInDate === today).length;
@@ -78,7 +86,7 @@ function Summary({ accounts, records, signIns, generatedAt }) {
     const draw = formatDrawTime(record.drawAt);
     return draw !== 'Unknown' && draw > now;
   }).length;
-  const items = [
+  const items: [string, number][] = [
     ['Enabled accounts', enabled],
     ['Active draws', activeDraws],
     ['Signed in today', signedToday],
@@ -98,7 +106,18 @@ function Summary({ accounts, records, signIns, generatedAt }) {
   );
 }
 
-function LotteryTable({ records, page, onPageChange, onSortChange, sortDescriptor }) {
+interface PagedTableProps {
+  page: number;
+  onPageChange: (page: number) => void;
+}
+
+interface LotteryTableProps extends PagedTableProps {
+  records: LotteryRecord[];
+  onSortChange: (descriptor: SortDescriptor) => void;
+  sortDescriptor: SortDescriptor;
+}
+
+function LotteryTable({ records, page, onPageChange, onSortChange, sortDescriptor }: LotteryTableProps) {
   const pageCount = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const rows = records.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
@@ -167,7 +186,7 @@ function LotteryTable({ records, page, onPageChange, onSortChange, sortDescripto
   );
 }
 
-function SignInTable({ signIns, page, onPageChange }) {
+function SignInTable({ signIns, page, onPageChange }: PagedTableProps & { signIns: SignInRecord[] }) {
   const pageCount = Math.max(1, Math.ceil(signIns.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const rows = signIns.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
@@ -209,22 +228,9 @@ function SignInTable({ signIns, page, onPageChange }) {
   );
 }
 
-export function ActivityPage({ data }) {
-  const [account, setAccount] = useState('all');
-  const [sortDescriptor, setSortDescriptor] = useState(DEFAULT_SORT_DESCRIPTOR);
-  const [search, setSearch] = useState('');
-  const [includeDrawn, setIncludeDrawn] = useState(false);
-  const [includeUnknown, setIncludeUnknown] = useState(false);
-  const [lotteryPage, setLotteryPage] = useState(0);
-  const [signInPage, setSignInPage] = useState(0);
-
-  const accountIds = useMemo(() => {
-    const ids = new Set();
-    for (const item of data.accounts) ids.add(item.id);
-    for (const item of data.records) ids.add(item.accountId);
-    for (const item of data.signIns) ids.add(item.accountId);
-    return Array.from(ids).sort();
-  }, [data]);
+export function ActivityPage({ data, filters, setFilters, accountIds }: FilteredPageProps) {
+  const { account, activitySearch: search, includeDrawn, includeUnknown, sort, direction, activityTab } = filters;
+  const sortDescriptor = useMemo(() => ({ column: sort, direction }), [sort, direction]);
 
   const filteredRecords = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -254,55 +260,59 @@ export function ActivityPage({ data }) {
     ));
   }, [account, data.signIns, search]);
 
-  function resetPages() {
-    setLotteryPage(0);
-    setSignInPage(0);
-  }
+  const lotteryPage = Math.min(filters.lotteryPage, Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE))) - 1;
+  const signInPage = Math.min(filters.signInPage, Math.max(1, Math.ceil(filteredSignIns.length / PAGE_SIZE))) - 1;
+
+  useEffect(() => {
+    if (filters.lotteryPage !== lotteryPage + 1 || filters.signInPage !== signInPage + 1) {
+      setFilters({ lotteryPage: lotteryPage + 1, signInPage: signInPage + 1 }, { replace: true });
+    }
+  }, [filters.lotteryPage, filters.signInPage, lotteryPage, signInPage, setFilters]);
 
   function clearFilters() {
-    setAccount('all');
-    setSortDescriptor(DEFAULT_SORT_DESCRIPTOR);
-    setSearch('');
-    setIncludeDrawn(false);
-    setIncludeUnknown(false);
-    resetPages();
+    setFilters({
+      account: 'all', activitySearch: '', includeDrawn: false, includeUnknown: false,
+      sort: 'engagedAt', direction: 'descending', lotteryPage: 1, signInPage: 1,
+    });
   }
 
-  function handleSortChange(nextDescriptor) {
-    setSortDescriptor((currentDescriptor) => (
-      currentDescriptor.column === nextDescriptor.column
-        ? nextDescriptor
-        : {
-            column: nextDescriptor.column,
-            direction: nextDescriptor.column === 'engagedAt' ? 'descending' : 'ascending',
-          }
-    ));
-    setLotteryPage(0);
+  function handleSortChange(nextDescriptor: SortDescriptor) {
+    if (nextDescriptor.column !== 'engagedAt' && nextDescriptor.column !== 'drawAt') return;
+    setFilters({
+      sort: nextDescriptor.column,
+      direction: sort === nextDescriptor.column ? nextDescriptor.direction
+        : nextDescriptor.column === 'engagedAt' ? 'descending' : 'ascending',
+    });
   }
 
   return (
     <>
       <PageHeader title="Activity" description="Review lottery engagement and daily sign-in outcomes across every crawler account." />
-      <Summary accounts={data.accounts} generatedAt={data.generatedAt} records={data.records} signIns={data.signIns} />
+      <Summary
+        accounts={data.accounts.filter((item) => account === 'all' || item.id === account)}
+        generatedAt={data.generatedAt}
+        records={data.records.filter((item) => account === 'all' || item.accountId === account)}
+        signIns={data.signIns.filter((item) => account === 'all' || item.accountId === account)}
+      />
 
       <div className="mb-6 rounded-lg border border-border bg-card p-3 shadow-xs">
         <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_220px]">
           <Field
             aria-label="Search activity"
             label="Search"
-            onChange={(value) => { setSearch(value); resetPages(); }}
+            onChange={(value) => setFilters({ activitySearch: value }, { replace: true })}
             placeholder="Thread, post ID, status…"
             value={search}
           />
-          <Select label="Account" onSelectionChange={(key) => { setAccount(String(key)); resetPages(); }} selectedKey={account}>
+          <Select label="Account" onSelectionChange={(key) => { if (key !== null) setFilters({ account: String(key) }); }} selectedKey={account}>
             <SelectItem id="all">All accounts</SelectItem>
             {accountIds.map((id) => <SelectItem key={id} id={id}>{id}</SelectItem>)}
           </Select>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3">
           <div className="mr-auto flex flex-wrap items-center gap-x-5 gap-y-1">
-            <Switch isSelected={includeDrawn} onChange={(value) => { setIncludeDrawn(value); setLotteryPage(0); }}>Include drawn</Switch>
-            <Switch isSelected={includeUnknown} onChange={(value) => { setIncludeUnknown(value); setLotteryPage(0); }}>Unknown draw times</Switch>
+            <Switch isSelected={includeDrawn} onChange={(value) => setFilters({ includeDrawn: value })}>Include drawn</Switch>
+            <Switch isSelected={includeUnknown} onChange={(value) => setFilters({ includeUnknown: value })}>Unknown draw times</Switch>
           </div>
           <Button onPress={clearFilters} size="sm" variant="ghost">
             <SlidersHorizontal aria-hidden="true" /> Reset
@@ -310,7 +320,9 @@ export function ActivityPage({ data }) {
         </div>
       </div>
 
-      <Tabs defaultSelectedKey="lotteries">
+      <Tabs selectedKey={activityTab} onSelectionChange={(key) => {
+        if (key === 'lotteries' || key === 'sign-ins') setFilters({ activityTab: key });
+      }}>
         <TabList aria-label="Activity type" className="mb-4 flex w-fit gap-1 rounded-lg bg-muted p-1">
           <Tab className="tab-trigger" id="lotteries">Lottery threads <span>{filteredRecords.length}</span></Tab>
           <Tab className="tab-trigger" id="sign-ins">Daily sign-ins <span>{filteredSignIns.length}</span></Tab>
@@ -324,7 +336,7 @@ export function ActivityPage({ data }) {
             />
           ) : (
             <LotteryTable
-              onPageChange={setLotteryPage}
+              onPageChange={(page) => setFilters({ lotteryPage: page + 1 })}
               onSortChange={handleSortChange}
               page={lotteryPage}
               records={filteredRecords}
@@ -339,7 +351,7 @@ export function ActivityPage({ data }) {
               onReset={clearFilters}
               title="No matching sign-ins"
             />
-          ) : <SignInTable onPageChange={setSignInPage} page={signInPage} signIns={filteredSignIns} />}
+          ) : <SignInTable onPageChange={(page) => setFilters({ signInPage: page + 1 })} page={signInPage} signIns={filteredSignIns} />}
         </TabPanel>
       </Tabs>
     </>

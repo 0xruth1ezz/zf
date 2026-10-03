@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { ArrowRight, LoaderCircle } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Field } from '../components/ui/field';
@@ -20,17 +20,21 @@ export function LoginPage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
 
-  async function handleSubmit(event) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
+    const values = {
+      username: String(form.get('username') || ''),
+      password: String(form.get('password') || ''),
+    };
     setPending(true);
     setError('');
     try {
       await login(values);
       window.location.replace(destination());
     } catch (failure) {
-      setError(failure.message || 'Unable to sign in. Please try again.');
+      setError(failure instanceof Error ? failure.message : 'Unable to sign in. Please try again.');
       setPending(false);
     }
   }

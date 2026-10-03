@@ -1,7 +1,15 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from './ui/button';
 
-export function Pagination({ label, page, pageSize, total, onPageChange }) {
+interface PaginationProps {
+  label: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}
+
+export function Pagination({ label, page, pageSize, total, onPageChange }: PaginationProps) {
   if (total <= pageSize) return null;
   const pageCount = Math.ceil(total / pageSize);
   const current = Math.min(page, pageCount - 1);

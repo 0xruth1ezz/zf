@@ -9,8 +9,10 @@ import { AccountsPage } from './pages/accounts-page';
 import { MessagesPage } from './pages/messages-page';
 import { LoginPage } from './pages/login-page';
 import { fetchDashboard, isSnapshotMode } from './data';
+import { useUrlFilters } from './lib/url-filters';
+import type { Route } from './types';
 
-function subscribeToRoute(callback) {
+function subscribeToRoute(callback: () => void) {
   window.addEventListener('hashchange', callback);
   window.addEventListener('popstate', callback);
   return () => {
@@ -19,7 +21,7 @@ function subscribeToRoute(callback) {
   };
 }
 
-function currentRoute() {
+function currentRoute(): Route {
   const route = window.location.hash.slice(1);
   if (route === 'accounts' || route === 'activity' || route === 'messages') return route;
   if (window.location.pathname.startsWith('/messages')) return 'messages';
@@ -29,7 +31,7 @@ function currentRoute() {
 }
 
 function useRoute() {
-  return useSyncExternalStore(subscribeToRoute, currentRoute, () => 'activity');
+  return useSyncExternalStore<Route>(subscribeToRoute, currentRoute, () => 'activity');
 }
 
 function LoadingState() {
@@ -46,7 +48,7 @@ function LoadingState() {
   );
 }
 
-function ErrorState({ error, onRetry }) {
+function ErrorState({ error, onRetry }: { error: Error; onRetry: () => void }) {
   return (
     <div className="grid min-h-svh place-items-center bg-background px-6 text-center">
       <div className="max-w-md rounded-lg border border-destructive/25 bg-card p-6">
@@ -68,6 +70,7 @@ export function App() {
 
 function Workspace() {
   const route = useRoute();
+  const [filters, setFilters] = useUrlFilters();
   const dashboard = useQuery({
     queryKey: ['dashboard'],
     queryFn: fetchDashboard,
@@ -79,6 +82,16 @@ function Workspace() {
   if (dashboard.isPending) return <LoadingState />;
   if (dashboard.isError && !dashboard.data) return <ErrorState error={dashboard.error} onRetry={() => dashboard.refetch()} />;
 
+  const accountIds = [...new Set([
+    ...dashboard.data.accounts.map((account) => account.id),
+    ...[
+      ...dashboard.data.records, ...dashboard.data.signIns,
+      ...(dashboard.data.messages || []), ...(dashboard.data.messageSync || []),
+    ].map((item) => item.accountId),
+    ...(filters.account === 'all' ? [] : [filters.account]),
+  ])].sort();
+  const pageProps = { data: dashboard.data, filters, setFilters, accountIds };
+
   return (
     <AccountColorProvider data={dashboard.data}>
       <AppShell
@@ -86,12 +99,14 @@ function Workspace() {
         onRefresh={() => dashboard.refetch()}
         route={route}
         updatedAt={dashboard.data.generatedAt}
-        unreadCount={(dashboard.data.messages || []).reduce((count, message) => count + message.unreadCount, 0)}
+        unreadCount={(dashboard.data.messages || [])
+          .filter((message) => filters.account === 'all' || message.accountId === filters.account)
+          .reduce((count, message) => count + message.unreadCount, 0)}
       >
         {dashboard.isError ? <p role="alert" className="mb-4 text-sm text-destructive">Refresh failed. Showing the last loaded data.</p> : null}
         {route === 'accounts' ? <AccountsPage data={dashboard.data} />
-          : route === 'messages' ? <MessagesPage data={dashboard.data} />
-            : <ActivityPage data={dashboard.data} />}
+          : route === 'messages' ? <MessagesPage {...pageProps} />
+            : <ActivityPage {...pageProps} />}
       </AppShell>
     </AccountColorProvider>
   );

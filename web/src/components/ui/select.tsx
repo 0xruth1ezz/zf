@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 import {
   Button,
@@ -7,10 +8,20 @@ import {
   Popover,
   Select as AriaSelect,
   SelectValue,
+  type SelectProps as AriaSelectProps,
+  type ListBoxProps,
+  type ListBoxItemProps,
 } from 'react-aria-components';
 import { cn } from '../../lib/utils';
 
-export function Select({ label, className, children, ...props }) {
+interface SelectProps<T extends object> extends Omit<AriaSelectProps<T>, 'children' | 'className'> {
+  label: ReactNode;
+  className?: string;
+  children: ListBoxProps<T>['children'];
+  items?: Iterable<T>;
+}
+
+export function Select<T extends object>({ label, className, children, items, ...props }: SelectProps<T>) {
   return (
     <AriaSelect {...props} className={cn('group grid min-w-0 gap-1.5', className)}>
       <Label className="text-xs font-semibold text-muted-foreground">{label}</Label>
@@ -19,13 +30,18 @@ export function Select({ label, className, children, ...props }) {
         <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
       </Button>
       <Popover className="z-popover min-w-(--trigger-width) overflow-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md entering:animate-in entering:fade-in entering:zoom-in-95 exiting:animate-out exiting:fade-out">
-        <ListBox className="max-h-72 outline-none">{children}</ListBox>
+        <ListBox items={items} className="max-h-72 outline-none">{children}</ListBox>
       </Popover>
     </AriaSelect>
   );
 }
 
-export function SelectItem({ children, className, ...props }) {
+interface SelectItemProps<T extends object> extends Omit<ListBoxItemProps<T>, 'children' | 'className'> {
+  children: ReactNode;
+  className?: string;
+}
+
+export function SelectItem<T extends object>({ children, className, ...props }: SelectItemProps<T>) {
   return (
     <ListBoxItem
       {...props}

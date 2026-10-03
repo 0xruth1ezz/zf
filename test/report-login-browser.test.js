@@ -70,13 +70,14 @@ test('report login validates credentials inline, preserves passwords, and return
   ]);
 });
 
-test('an expired report API session opens the login form and preserves the hash route', async (t) => {
+test('an expired report API session opens the login form and preserves query filters and the hash route', async (t) => {
   const { page } = await openReport(t);
-  await page.goto('https://report.test/#messages');
+  const destination = '/?account=operator&messagesSearch=hello%20world&unreadOnly=1#messages';
+  await page.goto(`https://report.test${destination}`);
   await page.getByRole('heading', { name: 'Sign in', exact: true }).waitFor();
-  assert.equal(new URL(page.url()).searchParams.get('next'), '/#messages');
+  assert.equal(new URL(page.url()).searchParams.get('next'), destination);
   await signIn(page);
-  await page.waitForURL('https://report.test/#messages');
+  await page.waitForURL(`https://report.test${destination}`);
   await page.getByRole('heading', { name: 'Private messages', exact: true }).waitFor();
 });
 
