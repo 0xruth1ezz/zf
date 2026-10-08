@@ -40,6 +40,8 @@ const CONFIG = {
 
 const LOTTERY_PREPARE_SECONDS = 30;
 const LOTTERY_LATE_SECONDS = 15;
+const LOTTERY_WINDOW_SECONDS = 2 * 3600;
+const LOTTERY_OPEN_SECONDS = 7.5 * 3600;
 // Every post uses the same configured time zone; reuse the native ICU formatter.
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
   timeZone: CONFIG.signInTimeZone,
@@ -195,15 +197,32 @@ function secondValueForTimeZone(date) {
     + date.getUTCSeconds() + date.getUTCMilliseconds() / 1000;
 }
 
-function wasEngagedInHour(record, hourStart) {
-  if (record?.attemptedHours?.includes(hourStart)) return true;
+function lotteryWindowForSecond(second) {
+  const dayStart = Math.floor(second / 86400) * 86400;
+  const opening = dayStart + LOTTERY_OPEN_SECONDS;
+  const start = opening + Math.floor((second - opening) / LOTTERY_WINDOW_SECONDS) * LOTTERY_WINDOW_SECONDS;
+  return { start, end: Math.min(start + LOTTERY_WINDOW_SECONDS, dayStart + 86400) };
+}
+
+function wasEngagedInWindow(record, start, end) {
+  if (record?.attemptedSeconds?.some((second) => second >= start && second < end)) return true;
   const engagedAt = new Date(record?.engagedAt || '');
   if (Number.isNaN(engagedAt.getTime())) return false;
   const engagedSecond = secondValueForTimeZone(engagedAt);
-  return engagedSecond >= hourStart && engagedSecond < hourStart + 3600;
+  return engagedSecond >= start && engagedSecond < end;
 }
 
-function nextHourlyEngagementSecond(record, now = new Date(), random = Math.random, reserved = new Set()) {
+function loadLotteryAttemptSeconds(store, record, now = new Date()) {
+  // Use the actual send time so legacy hourly attempts also occupy the correct
+  // two-hour window, including attempts on either side of a half-hour boundary.
+  return store.db.prepare(`
+    SELECT started_at FROM lottery_attempts WHERE account_id = ? AND post_id = ?
+      AND hour_start >= ?
+  `).all(record.accountId, record.postId, Math.floor(secondValueForTimeZone(now) / 86400) * 86400)
+    .map((row) => secondValueForTimeZone(new Date(row.started_at)));
+}
+
+function nextLotteryEngagementSecond(record, now = new Date(), random = Math.random, reserved = new Set()) {
   const drawMinute = dateTimeMinuteValue(record.drawAt);
   if (drawMinute === null) return null;
   const drawSecond = drawMinute * 60;
@@ -211,11 +230,9 @@ function nextHourlyEngagementSecond(record, now = new Date(), random = Math.rand
   const today = Math.floor(nowSecond / 86400) * 86400;
 
   for (let day = today; day <= today + 86400; day += 86400) {
-    for (let hour = 7; hour < 24; hour += 1) {
-      const hourStart = day + hour * 3600;
-      const start = hourStart + (hour === 7 ? 1800 : 0);
-      const end = Math.min(hourStart + 3600, drawSecond);
-      if (nowSecond >= end || wasEngagedInHour(record, hourStart)) continue;
+    for (let start = day + LOTTERY_OPEN_SECONDS; start < day + 86400; start += LOTTERY_WINDOW_SECONDS) {
+      const end = Math.min(start + LOTTERY_WINDOW_SECONDS, day + 86400, drawSecond);
+      if (nowSecond >= end || wasEngagedInWindow(record, start, end)) continue;
 
       // Preserve a plan across restarts only while it can still run on time.
       // Overdue posts get a new future time instead of forming a catch-up batch.
@@ -241,18 +258,18 @@ function nextHourlyEngagementSecond(record, now = new Date(), random = Math.rand
   return null;
 }
 
-function isHourlyEngagementDue(record, now = new Date()) {
+function isLotteryEngagementDue(record, now = new Date()) {
   if (!Number.isFinite(record?.scheduledSecond)) return false;
   const nowSecond = secondValueForTimeZone(now);
-  const hourStart = Math.floor(record.scheduledSecond / 3600) * 3600;
-  const dayStart = Math.floor(hourStart / 86400) * 86400;
+  const { start, end } = lotteryWindowForSecond(record.scheduledSecond);
+  const dayStart = Math.floor(record.scheduledSecond / 86400) * 86400;
   const drawMinute = dateTimeMinuteValue(record.drawAt);
-  return record.scheduledSecond >= dayStart + 7.5 * 3600
+  return record.scheduledSecond >= dayStart + LOTTERY_OPEN_SECONDS
     && nowSecond >= record.scheduledSecond
     && nowSecond <= record.scheduledSecond + LOTTERY_LATE_SECONDS
-    && nowSecond < hourStart + 3600
+    && nowSecond < end
     && drawMinute !== null && nowSecond < drawMinute * 60
-    && !wasEngagedInHour(record, hourStart);
+    && !wasEngagedInWindow(record, start, end);
 }
 
 function ensureLotterySchedule(store, record, now = new Date(), random = Math.random) {
@@ -264,16 +281,12 @@ function ensureLotterySchedule(store, record, now = new Date(), random = Math.ra
     const engagement = getEngagement(store, record.accountId, record.postId);
     const schedule = { ...engagement, ...existing, ...record,
       engagedAt: engagement?.engagedAt, scheduledSecond: existing?.scheduledSecond };
-    schedule.attemptedHours = store.db.prepare(`
-      SELECT hour_start FROM lottery_attempts WHERE account_id = ? AND post_id = ?
-        AND hour_start >= ?
-    `).all(record.accountId, record.postId, Math.floor(secondValueForTimeZone(now) / 86400) * 86400)
-      .map((row) => row.hour_start);
+    schedule.attemptedSeconds = loadLotteryAttemptSeconds(store, record, now);
     const reserved = new Set(store.db.prepare(`
       SELECT scheduled_second FROM lottery_schedules
       WHERE scheduled_second IS NOT NULL AND NOT (account_id = ? AND post_id = ?)
     `).all(record.accountId, record.postId).map((row) => row.scheduled_second));
-    schedule.scheduledSecond = nextHourlyEngagementSecond(schedule, now, random, reserved);
+    schedule.scheduledSecond = nextLotteryEngagementSecond(schedule, now, random, reserved);
     if (!existing || ['title', 'url', 'drawAt', 'scheduledSecond']
       .some((key) => existing[key] !== schedule[key])) {
       saveLotterySchedule(store, schedule);
@@ -304,7 +317,7 @@ function rescheduleLotteryRequest(store, accountId, request, now = new Date()) {
   if (result.changes) ensureLotterySchedule(store, { accountId, postId }, now);
 }
 
-function nextHourlyDelaySeconds(records, now = new Date()) {
+function nextLotteryDelaySeconds(records, now = new Date()) {
   const nowSecond = secondValueForTimeZone(now);
   const delays = records
     .filter((record) => Number.isFinite(record.scheduledSecond))
@@ -585,12 +598,12 @@ function loadTrackedActiveLotteryRequests(store, accountId, now = new Date()) {
   return trackedActiveLotteryRequests(listTrackedLotteries(store), accountId, now);
 }
 
-function nextHourlyLotteryRequest(store, accountIds, now = new Date()) {
+function nextLotteryRequest(store, accountIds, now = new Date()) {
   const records = refreshLotterySchedules(store, now)
     .filter((record) => accountIds.has(record.accountId) && Number.isFinite(record.scheduledSecond))
     .sort((left, right) => left.scheduledSecond - right.scheduledSecond);
   for (const record of records) {
-    if (nextHourlyDelaySeconds([record], now) > 0) return null;
+    if (nextLotteryDelaySeconds([record], now) > 0) return null;
     const [request] = trackedActiveLotteryRequests([record], record.accountId, now);
     if (!request) continue;
     return { accountId: record.accountId, request: {
@@ -660,13 +673,13 @@ function saveExistingEngagementMetadata(store, existingEngagement, updates) {
     updates.drawAt || existingEngagement.drawAt, existingEngagement.accountId, existingEngagement.postId);
 }
 
-function printNextHourlyDelay() {
+function printNextLotteryDelay() {
   const engagedStore = openEngagedStore(ENGAGED_DB, ENGAGED_HTML);
   try {
     const enabledAccountIds = new Set(loadAccounts(engagedStore).map((account) => account.id));
     const records = refreshLotterySchedules(engagedStore)
       .filter((record) => enabledAccountIds.has(record.accountId));
-    const delay = nextHourlyDelaySeconds(records);
+    const delay = nextLotteryDelaySeconds(records);
     process.stdout.write(delay === null ? 'none\n' : `${delay}\n`);
   } finally {
     engagedStore.db.close();
@@ -693,12 +706,19 @@ module.exports = {
   ensureLotterySchedule,
   finishCrawlerProcess,
   isDrawTimeCompleted,
-  isHourlyEngagementDue,
-  nextHourlyLotteryRequest,
+  isLotteryEngagementDue,
+  lotteryWindowForSecond,
+  loadLotteryAttemptSeconds,
+  nextLotteryRequest,
   loadTrackedActiveLotteryRequests,
   mergePostRequests,
-  nextHourlyDelaySeconds,
-  nextHourlyEngagementSecond,
+  nextLotteryDelaySeconds,
+  nextLotteryEngagementSecond,
+  // Keep existing callers compatible with the new two-hour schedule.
+  isHourlyEngagementDue: isLotteryEngagementDue,
+  nextHourlyLotteryRequest: nextLotteryRequest,
+  nextHourlyDelaySeconds: nextLotteryDelaySeconds,
+  nextHourlyEngagementSecond: nextLotteryEngagementSecond,
   refreshLotterySchedules,
   rescheduleLotteryRequest,
   saveExistingEngagementMetadata,
@@ -706,11 +726,11 @@ module.exports = {
 };
 
 if (require.main === module) {
-  if (hasFlag('--next-hourly-delay')) {
+  if (hasFlag('--next-lottery-delay') || hasFlag('--next-hourly-delay')) {
     try {
-      printNextHourlyDelay();
+      printNextLotteryDelay();
     } catch (error) {
-      log.exception(error, 'Failed to calculate the next hourly run');
+      log.exception(error, 'Failed to calculate the next lottery run');
       process.exitCode = 1;
     }
   } else {

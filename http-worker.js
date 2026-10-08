@@ -5,7 +5,8 @@ const { default: log } = require('@apify/log');
 const {
   CONFIG, ENGAGED_DB, ENGAGED_HTML, PROFILE_DIR, loadAccounts, dateKeyForTimeZone,
   dateTimeMinuteValue, secondValueForTimeZone, ensureLotterySchedule, refreshLotterySchedules,
-  isHourlyEngagementDue, rescheduleLotteryRequest, saveExistingEngagementMetadata,
+  isLotteryEngagementDue, lotteryWindowForSecond, loadLotteryAttemptSeconds,
+  rescheduleLotteryRequest, saveExistingEngagementMetadata,
 } = require('./zfrontier-lottery-crawler');
 const { openEngagedStore, getEngagement, getLotterySchedule, saveLotterySchedule, saveEngagement,
   listTrackedLotteries, hasSignIn, saveSignIn, initializeMessageSync, saveMessageSyncError, renderEngagementHtml } = require('./engaged-store');
@@ -104,11 +105,23 @@ async function discoverAccount(client, store, account, guard = () => true, now =
 }
 
 function claimAttempt(store, record, now = new Date()) {
-  const fresh = { ...getEngagement(store, record.accountId, record.postId), ...getLotterySchedule(store, record.accountId, record.postId) };
-  if (fresh.scheduledSecond !== record.scheduledSecond || !isHourlyEngagementDue(fresh, now)) return false;
-  const hour = Math.floor(record.scheduledSecond / 3600) * 3600;
-  return Boolean(store.db.prepare(`INSERT OR IGNORE INTO lottery_attempts (account_id, post_id, hour_start, started_at)
-    VALUES (?, ?, ?, ?)`).run(record.accountId, record.postId, hour, now.toISOString()).changes);
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    const fresh = { ...getEngagement(store, record.accountId, record.postId), ...getLotterySchedule(store, record.accountId, record.postId),
+      attemptedSeconds: loadLotteryAttemptSeconds(store, record, now) };
+    let claimed = false;
+    if (fresh.scheduledSecond === record.scheduledSecond && isLotteryEngagementDue(fresh, now)) {
+      const { start } = lotteryWindowForSecond(record.scheduledSecond);
+      // Retain the legacy column name; new keys identify two-hour windows.
+      claimed = Boolean(store.db.prepare(`INSERT OR IGNORE INTO lottery_attempts (account_id, post_id, hour_start, started_at)
+        VALUES (?, ?, ?, ?)`).run(record.accountId, record.postId, start, now.toISOString()).changes);
+    }
+    store.db.exec('COMMIT');
+    return claimed;
+  } catch (error) {
+    store.db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 async function engagePost({ client, store, account, record, guard = () => true, signal, now = () => new Date(), wait = sleep, dryRun = CONFIG.dryRun }) {
@@ -123,7 +136,7 @@ async function engagePost({ client, store, account, record, guard = () => true, 
     if (!guard()) return;
   }
   if (dryRun || !guard() || !claimAttempt(store, prepared, now())) return;
-  const hour = Math.floor(record.scheduledSecond / 3600) * 3600;
+  const { start: windowStart } = lotteryWindowForSecond(record.scheduledSecond);
   const sentAt = now();
   let result;
   try {
@@ -134,10 +147,10 @@ async function engagePost({ client, store, account, record, guard = () => true, 
   } catch (error) {
     if (error.status === 401) client.validatedDay = '';
     if (error.rejected) {
-      store.db.prepare('DELETE FROM lottery_attempts WHERE account_id = ? AND post_id = ? AND hour_start = ?').run(account.id, record.postId, hour);
+      store.db.prepare('DELETE FROM lottery_attempts WHERE account_id = ? AND post_id = ? AND hour_start = ?').run(account.id, record.postId, windowStart);
     } else {
-      store.db.prepare("UPDATE lottery_attempts SET state = 'uncertain' WHERE account_id = ? AND post_id = ? AND hour_start = ?").run(account.id, record.postId, hour);
-      log.warning(`[${account.id}] Delivery is uncertain for ${record.postId}; no repeat will be sent in this hour.`);
+      store.db.prepare("UPDATE lottery_attempts SET state = 'uncertain' WHERE account_id = ? AND post_id = ? AND hour_start = ?").run(account.id, record.postId, windowStart);
+      log.warning(`[${account.id}] Delivery is uncertain for ${record.postId}; no repeat will be sent in this two-hour window.`);
     }
     throw error;
   }
@@ -148,7 +161,7 @@ async function engagePost({ client, store, account, record, guard = () => true, 
     const count = existing?.lastEngagedDate === date ? existing.dailyEngagementCount : 0;
     saveEngagement(store, { ...prepared, lastEngagedDate: date, dailyEngagementCount: count + 1, engagedAt: sentAt.toISOString() });
     store.db.prepare("UPDATE lottery_attempts SET state = 'confirmed', reply_id = ? WHERE account_id = ? AND post_id = ? AND hour_start = ?")
-      .run(String(result.reply.id), account.id, record.postId, hour);
+      .run(String(result.reply.id), account.id, record.postId, windowStart);
     store.db.exec('COMMIT');
   } catch (error) {
     store.db.exec('ROLLBACK');

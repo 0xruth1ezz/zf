@@ -87,7 +87,7 @@ test('independent jobs send at their assigned times; a blocked first job does no
   release(); await pool.drain();
 });
 
-test('uncertain delivery is persisted and cannot be retried in the same hour after restarting', async (t) => {
+test('uncertain delivery is persisted and cannot be retried in the same two-hour window after restarting', async (t) => {
   const f = fixture(t);
   let sends = 0;
   f.client.signed = async () => { sends++; throw new Error('connection closed'); };
@@ -95,9 +95,11 @@ test('uncertain delivery is persisted and cannot be retried in the same hour aft
   assert.equal(getEngagement(f.store, 'a', 'post'), undefined);
   assert.equal(f.store.db.prepare('SELECT state FROM lottery_attempts').get().state, 'uncertain');
   assert.equal(claimAttempt(f.store, f.record, local('10:15:01')), false);
-  const next = ensureLotterySchedule(f.store, f.record, local('10:15:01'), () => 0);
-  assert.equal(next.scheduledSecond, secondValueForTimeZone(local('11:00:00')));
-  await engagePost({ ...f, now: () => local('10:15:01') });
+  f.store.db.close();
+  f.store.db = openEngagedStore(f.store.dbPath, f.store.htmlPath).db;
+  const next = ensureLotterySchedule(f.store, f.record, local('11:00:00'), () => 0);
+  assert.equal(next.scheduledSecond, secondValueForTimeZone(local('11:30:00')));
+  await engagePost({ ...f, now: () => local('11:00:00') });
   assert.equal(sends, 1);
 });
 
@@ -105,7 +107,7 @@ test('pending crash records also prevent repeats, while confirmed rejections can
   const f = fixture(t);
   assert.equal(claimAttempt(f.store, f.record, local('10:15:00')), true);
   assert.equal(claimAttempt(f.store, f.record, local('10:15:00')), false);
-  assert.ok(ensureLotterySchedule(f.store, f.record, local('10:15:01')).scheduledSecond >= secondValueForTimeZone(local('11:00:00')));
+  assert.ok(ensureLotterySchedule(f.store, f.record, local('10:15:01')).scheduledSecond >= secondValueForTimeZone(local('11:30:00')));
   f.store.db.exec('DELETE FROM lottery_attempts');
   saveLotterySchedule(f.store, f.record);
   f.client.signed = async () => { throw new ZfError('rate limited', { code: 20001, rejected: true }); };
@@ -131,7 +133,7 @@ test('late preparations, disabled accounts, expired draws and dry runs cannot su
   }
 });
 
-test('successful reply and daily count commit together; a second call cannot repeat the hour', async (t) => {
+test('successful reply and daily count commit together; a second call cannot repeat the window', async (t) => {
   const f = fixture(t);
   saveEngagement(f.store, { ...f.record, engagedAt: local('09:10:00').toISOString(), lastEngagedDate: '2026-09-21', dailyEngagementCount: 2 });
   await engagePost({ ...f, now: () => local('10:15:00') });
@@ -139,6 +141,33 @@ test('successful reply and daily count commit together; a second call cannot rep
   assert.deepEqual({ ...f.store.db.prepare('SELECT state, reply_id FROM lottery_attempts').get() }, { state: 'confirmed', reply_id: '123' });
   await engagePost({ ...f, now: () => local('10:15:01') });
   assert.equal(f.requests.filter((r) => r.url === '/v2/flow/reply').length, 1);
+});
+
+test('attempt claims cover both hours and release at the next half-hour window boundary', (t) => {
+  const f = fixture(t);
+  assert.equal(claimAttempt(f.store, f.record, local('10:15:00')), true);
+  const secondHour = { ...f.record, scheduledSecond: secondValueForTimeZone(local('11:15:00')) };
+  saveLotterySchedule(f.store, secondHour);
+  assert.equal(claimAttempt(f.store, secondHour, local('11:15:00')), false);
+  const nextWindow = { ...f.record, scheduledSecond: secondValueForTimeZone(local('11:30:00')) };
+  saveLotterySchedule(f.store, nextWindow);
+  assert.equal(claimAttempt(f.store, nextWindow, local('11:30:00')), true);
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM lottery_attempts').get().n, 2);
+});
+
+test('legacy hourly attempts use their send time to block only the matching two-hour window', (t) => {
+  for (const [time, blocked] of [['09:20:00', false], ['09:40:00', true], ['10:05:00', true]]) {
+    const f = fixture(t, time);
+    const hour = Math.floor(secondValueForTimeZone(local(time)) / 3600) * 3600;
+    f.store.db.prepare(`INSERT INTO lottery_attempts (account_id, post_id, hour_start, started_at, state)
+      VALUES (?, ?, ?, ?, 'uncertain')`).run('a', time, hour, local(time).toISOString());
+    f.store.db.close();
+    f.store.db = openEngagedStore(f.store.dbPath, f.store.htmlPath).db;
+    // Check the final send guard against the old row even before schedule refresh.
+    assert.equal(claimAttempt(f.store, f.record, local('10:15:00')), !blocked, time);
+    const next = ensureLotterySchedule(f.store, f.record, local('10:15:01'), () => 0);
+    assert.equal(next.scheduledSecond, secondValueForTimeZone(local('11:30:00')), time);
+  }
 });
 
 test('a worker lease prevents concurrent processes and permits recovery after expiry', (t) => {

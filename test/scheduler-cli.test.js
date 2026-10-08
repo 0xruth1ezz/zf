@@ -31,9 +31,9 @@ function schedulerFixture(t) {
     };
   `);
 
-  function poll(now = '2026-09-20T01:00:00.000Z', dbPath = store.dbPath, timeZone = 'Asia/Shanghai') {
+  function poll(now = '2026-09-20T01:00:00.000Z', dbPath = store.dbPath, timeZone = 'Asia/Shanghai', flag = '--next-lottery-delay') {
     return spawnSync(process.execPath, ['--require', preload,
-      path.join(__dirname, '../zfrontier-lottery-crawler.js'), '--next-hourly-delay'], {
+      path.join(__dirname, '../zfrontier-lottery-crawler.js'), flag], {
       env: { ...process.env, ENV_FILE: path.join(dir, 'no-env'), TEST_NOW: now,
         ZF_SIGN_IN_TZ: timeZone, ZF_ENGAGED_DB: dbPath, ZF_ENGAGED_HTML: store.htmlPath },
       encoding: 'utf8', timeout: 10000,
@@ -58,6 +58,14 @@ test('database-only scheduler preserves assigned times, filters disabled account
     assert.equal(result.stdout, expected);
     assert.equal(getLotterySchedule(store, 'enabled', 'enabled').scheduledSecond, assigned);
   }
+});
+
+test('the legacy hourly-delay flag remains compatible', (t) => {
+  const { poll, schedule } = schedulerFixture(t);
+  schedule('enabled', '09:01:00');
+  const result = poll(undefined, undefined, undefined, '--next-hourly-delay');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '30\n');
 });
 
 test('database-only scheduler reports none for empty queues and disabled accounts', (t) => {
@@ -87,6 +95,6 @@ test('database-only scheduler reports database errors without loading browser de
   const result = poll(undefined, dir);
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout, '');
-  assert.match(result.stderr, /Failed to calculate the next hourly run/);
+  assert.match(result.stderr, /Failed to calculate the next lottery run/);
   assert.doesNotMatch(result.stderr, /Browser dependency loaded/);
 });
