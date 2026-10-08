@@ -31,15 +31,16 @@ function loginWithBrowser(account, { forceLogin = false, signal } = {}) {
 }
 
 async function exportBrowserSession(account, forceLogin) {
-  const { PlaywrightCrawler } = require('crawlee');
+  const { PlaywrightCrawler, ProxyConfiguration } = require('crawlee');
   const { chromium } = require('playwright');
   const { CONFIG, START_URL, profileDirForAccount, crawlerBrowserPoolOptions, navigateTo, ensureLoggedIn } = require('./zfrontier-lottery-crawler');
   let session;
   const crawler = new PlaywrightCrawler({
     maxConcurrency: 1, maxRequestRetries: 0, requestHandlerTimeoutSecs: 110,
     useSessionPool: false,
+    proxyConfiguration: CONFIG.proxyUrl ? new ProxyConfiguration({ proxyUrls: [CONFIG.proxyUrl] }) : undefined,
     launchContext: { launcher: chromium, useChrome: CONFIG.useChrome,
-      proxyUrl: CONFIG.proxyUrl || undefined, userDataDir: profileDirForAccount(account, account.id === 'default' ? 1 : 2),
+      userDataDir: profileDirForAccount(account, account.id === 'default' ? 1 : 2),
       useIncognitoPages: false, launchOptions: { headless: CONFIG.headless, serviceWorkers: 'block',
         viewport: { width: CONFIG.viewportWidth, height: CONFIG.viewportHeight } } },
     browserPoolOptions: crawlerBrowserPoolOptions(),
